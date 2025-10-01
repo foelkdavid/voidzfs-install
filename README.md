@@ -9,11 +9,12 @@ Interactive Voidlinux on ZFS installer (optional with zfs-mirror)
 ## Features:
 - Boots from ZFSBootMenu
 - Optional Encryption
-- Optional ZFS-Mirror
+- Optional Raid1/Mirror Setup
+    - RAID1 mirrored EFI-Partitions via mdadm
+    - ZFS-Mirrored System Partitions
 - Optional Swap
-- Creates additional Dataset for /home
-- Provides Hooks to keep EFI partitions in-sync on updates.
-- Provides Config file for automatic Snapshotting
+- Creates additional dataset for /home
+- Provides runit services for automatic Snapshotting
 
 **This requires UEFI to boot.**
 
