@@ -877,7 +877,7 @@ sync_esps() {
 # TODO: add setup for single disk, dont have time rn
 setup_swap() {
     export SWAPPART_DISK_1="$(devpart "$VOID_DISK1" 2)"
-    export SWAPPART_DISK_2="$(devpart "$VOID_DISK1" 2)"
+    export SWAPPART_DISK_2="$(devpart "$VOID_DISK2" 2)"
     sudo mkswap $SWAPPART_DISK_1
     sudo mkswap $SWAPPART_DISK_2
     SWAP1_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_1")"
