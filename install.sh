@@ -700,7 +700,6 @@ tail_window() { # tail_window <N> <command...>
 	return "$rc"
 }
 
-
 configure_dracut() {
 	info "[Writing dracut config for zfs]"
 
@@ -743,7 +742,6 @@ install_base_system() {
 	configure_dracut
 
 }
-
 
 configure_rc_conf() {
 	info "[Writing rc.conf]"
