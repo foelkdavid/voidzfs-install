@@ -6,6 +6,9 @@
 VOID_CHECK_HOSTNAME=true
 
 
+VOID_REPO_MIRROR=https://repo-de.voidlinux.org/current
+VOID_HWCLOCK=UTC
+
 set -Eeo pipefail
 
 
@@ -25,16 +28,17 @@ ok() { printf "  %b %s\n" "${G}✔${NC}" "$1"; }
 fail() { printf "  %b %s\n" "${R}✘${NC}" "$1"; }
 failhard() { printf "  %b\n" "${R}✘ $1${NC}"; }
 info() { printf "%b%s%b\n" "$P" "$1" "$NC"; }
+note() { printf "  %b%s%b\n" "$LB" "$1" "$NC"; }
 
 
 # used in run_prechecks()
 check() {
     local desc="$1"; shift
-    if [ "$1" = "hostnamecheck" ]; then
+    if [ "$1" = "hostnamecheck" ] || [ "$1" = "zfscheck" ]; then
         if "$@"; then
             ok "$desc"
         else
-            # hostnamecheck already printed failhard
+            # function already printed failhard
             FAILED=1
         fi
     else
@@ -48,10 +52,9 @@ check() {
 }
 
 
-
 hostnamecheck() {
     if [ "${VOID_CHECK_HOSTNAME}" != true ]; then
-        return 0  # check disabled
+        return 0
     fi
 
     local hn
@@ -65,6 +68,22 @@ hostnamecheck() {
     return 1
 }
 
+
+zfscheck() {
+    command -v zgenhostid >/dev/null 2>&1 || {
+        failhard "Missing 'zgenhostid' (part of zfs utilities)"
+        return 1
+    }
+
+    if ! modprobe -n zfs >/dev/null 2>&1; then
+        failhard "Kernel module 'zfs' not available on this system"
+        return 1
+    fi
+
+    return 0
+}
+
+
 run_prechecks() {
     clear
     echo "──────────────────────"
@@ -73,9 +92,10 @@ run_prechecks() {
     FAILED=0
     info "[Running Pre-Checks]"
     check "System booted in EFI mode" test -d /sys/firmware/efi
+    check "Check hostname" hostnamecheck
+    check "ZFS utilities and module available" zfscheck
     check "Connectivity to 1.1.1.1 (ICMP)" ping -c2 -W2 1.1.1.1
     check "DNS resolution (voidlinux.org)" ping -c2 -W2 voidlinux.org
-    check "Check hostname" hostnamecheck
 
     if [ "$FAILED" -ne 0 ]; then
         echo
@@ -84,12 +104,15 @@ run_prechecks() {
     fi
 }
 
+
 print_preconf_header() {
     clear
     echo "──────────────────────"
     echo -e "${G}Void-ZFS-Installer${NC}"
     echo "──────────────────────"
     echo -e "${Y}[Configuration]${NC}"
+    echo -e "  Xbps-Mirror  -> [ ${Y}${VOID_REPO_MIRROR}${NC} ]"
+    echo -e "  HW-CLOCK     -> [ ${Y}${VOID_HWCLOCK}${NC} ]"
     echo -e "  ZFS-Mirror?  -> [ ${Y}${VOID_MIRROR:-}${NC} ]"
     echo -e "  Disk1        -> [ ${Y}${VOID_DISK1:-}${NC} ] ${VOID_DISK1_SIZE}"
     echo -e "  Disk2        -> [ ${Y}${VOID_DISK2:-}${NC} ] ${VOID_DISK2_SIZE}"
@@ -101,6 +124,7 @@ print_preconf_header() {
     echo "──────────────────────"
 }
 
+
 print_postconf_header() {
     clear
     echo "──────────────────────"
@@ -109,16 +133,19 @@ print_postconf_header() {
     echo -e "${Y}[Installing...]${NC}"
 }
 
+
 get_disks() {
     info "[Select Disk $([[ -n ${VOID_DISK1:-} ]] && echo 2 || echo 1)]"
-    disklist="$(lsblk -ndp | awk '{printf "  %-15s %s\n", $1, $4}')"
+
+    # only shows relevant info + also removes disks that are not of type DISK (like loop devices etc)
+    disklist="$(lsblk -ndo NAME,SIZE,TYPE -dp | awk '$3=="disk"{printf "  %-15s %s\n", $1, $2}')"
     echo -e "${LB}${disklist}${NC}"
     echo "──────────────────────"
 
     while true; do
         read -rp "Enter the full path of the disk you want to use: " chosen_disk
 
-        if ! lsblk -dpno NAME | grep -qx "$chosen_disk"; then
+        if ! lsblk -dno NAME -p | grep -qx "$chosen_disk"; then
             failhard "Invalid disk path: ${chosen_disk}"
         elif [[ $chosen_disk == "${VOID_DISK1:-}" ]]; then
             failhard "You already selected this disk: ${chosen_disk}${NC}"
@@ -128,7 +155,7 @@ get_disks() {
             [[ -n "${VOID_DISK1:-}" ]] && disk_var="VOID_DISK2"
             [[ -n "${VOID_DISK1:-}" ]] && size_var="VOID_DISK2_SIZE"
             printf -v "$disk_var" "%s" "$chosen_disk"
-            read -r disk_size < <(lsblk -dnpo SIZE "$chosen_disk") # This cleans whitespaces (lsblk output can differ greatly)
+            read -r disk_size < <(lsblk -dnpo SIZE "$chosen_disk")
             printf -v "$size_var" "(%s)" "$disk_size"
             break
         fi
@@ -154,7 +181,7 @@ mirror_decision() {
 
 get_swapsize() {
     info "[Swap Configuration]"
-    echo -e "  ${B}If you use a mirror, swap will be partitioned on both disks.${NC}"
+    note "If you use a mirror, swap will be partitioned on both disks."
     echo "──────────────────────"
     while true; do
       read -rp $'Enter swap size in GB: ' VOID_SWAPSIZE || true
@@ -175,9 +202,10 @@ validate_hostname() {
   [[ "$h" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]
 }
 
+
 get_hostname() {
     info "[Set Hostname]"
-    echo -e "  ${B}Validity will be checked automatically..${NC}"
+    note "Validity will be checked automatically.."
     echo "──────────────────────"
     while true; do
       read -rp $'Enter hostname for new system: ' VOID_HOSTNAME || true
@@ -203,7 +231,7 @@ validate_username() {
 
 get_sudouser() {
     info "[Configure sudo-user]"
-    echo -e "  ${B}Your desired username, probably..${NC}"
+    note "Your desired username, probably.."
     echo "──────────────────────"
     while true; do
       read -rp $'Enter username for new system: ' VOID_SUDOUSER || true
@@ -223,10 +251,11 @@ validate_timezone() {
     [ -f "/usr/share/zoneinfo/$1" ]
 }
 
+
 get_timezone() {
     info "[Configure timezone]"
-    echo -e "  ${B}Located at /usr/share/zoneinfo* ${NC}"
-    echo -e "  ${B}e.g. Europe/Vienna${NC}"
+    note "Located at /usr/share/zoneinfo*"
+    note "e.g. Europe/Vienna"
     echo "──────────────────────"
     while true; do
       read -rp $'Enter timezone: ' VOID_TIMEZONE || true
@@ -249,7 +278,7 @@ validate_keymap() {
 
 get_keymap() {
     info "[Configure keymap]"
-    echo -e "  ${B}e.g. de, de-latin1, us, ...${NC}"
+    note "e.g. de, de-latin1, us, ..."
     echo "──────────────────────"
     while true; do
       read -rp $'Enter keymap: ' VOID_KEYMAP || true
@@ -263,9 +292,10 @@ get_keymap() {
     done
 }
 
+
 confirm_menu() {
     info "[Configuration finished]"
-    echo -e "  ${B}What do you want to do?${NC}"
+    note "What do you want to do?"
     echo -e "    [${G}c${NC}] Continue with partitioning"
     echo -e "    [${Y}r${NC}] Restart configuration"
     echo -e "    [${R}e${NC}] Exit without changes"
@@ -278,6 +308,7 @@ confirm_menu() {
       esac
     done
 }
+
 
 get_inputs() {
     clear
@@ -304,26 +335,502 @@ get_inputs() {
 # 512 -> EFI
 # $VOID_SWAPSIZE -> swap
 # REST OF DISK -> zfs
-disk_partitioning() {
+partition_disks() {
 
-  # Check if disk 2 exists
+  # Collect disks
   local disks=("$VOID_DISK1")
   [[ "${VOID_MIRROR:-false}" == true && -n "${VOID_DISK2:-}" && "$VOID_DISK2" != "none" ]] && disks+=("$VOID_DISK2")
 
-  # partition disk(s)
   for d in "${disks[@]}"; do
     info "[Partitioning $d]"
+
+    # wipe existing layout
     sgdisk --zap-all "$d" >/dev/null || { failhard "Wipe failed: $d"; exit 1; }
-    sgdisk \
-      -n1:1MiB:+512MiB  -t1:ef00 -c1:EFI \
-      -n2:0:+${VOID_SWAPSIZE}GiB -t2:8200 -c2:swap \
-      -n3:0:-10MiB      -t3:bf00 -c3:zfs \
-      "$d" >/dev/null || { failhard "sgdisk failed on $d"; exit 1; }
+
+    # create EFI
+    sgdisk -n1:1MiB:+512MiB -t1:ef00 -c1:EFI "$d" >/dev/null \
+      || { failhard "EFI partition failed on $d"; exit 1; }
+    ok "Created EFI-Partition on $d"
+
+    # create swap
+    sgdisk -n2:0:+${VOID_SWAPSIZE}GiB -t2:8200 -c2:swap "$d" >/dev/null \
+      || { failhard "Swap partition failed on $d"; exit 1; }
+    ok "Created Swap-Partition on $d"
+
+    # create zfs
+    sgdisk -n3:0:-10MiB -t3:bf00 -c3:zfs "$d" >/dev/null \
+      || { failhard "ZFS partition failed on $d"; exit 1; }
+    ok "Created ZFS-Partition on $d"
+
+    # reload kernel partition table
     partprobe "$d" >/dev/null 2>&1 || true
-    ok "Created EFI/swap/ZFS on $d"
   done
 }
 
+
+# used in set_zfs_vars
+devpart() {
+  local disk="$1" part="${2:-1}" sep=""
+  [[ "$disk" =~ ^/dev/(nvme|mmcblk|nbd|loop) ]] && sep="p"
+  printf "%s%s%s" "$disk" "$sep" "$part"
+}
+
+
+set_zfs_vars() {
+    info "[Setting ZFS-Vars for $VOID_DISK1"
+     # Disk 1
+     export BOOT_DISK_1="$VOID_DISK1"
+     export BOOT_PART_1=1
+     export BOOT_DEVICE_1="$(devpart "$VOID_DISK1" 1)"
+     ok "BOOT_DEVICE_1 set to $BOOT_DEVICE_1"
+
+     export POOL_DISK_1="$VOID_DISK1"
+     export POOL_PART_1=3
+     export POOL_DEVICE_1="$(devpart "$VOID_DISK1" 3)"
+     ok "POOL_DEVICE_1 set to $POOL_DEVICE_1"
+
+     # Disk 2 (only if set and not "none")
+     #
+     if [[ -n "${VOID_DISK2:-}" && "$VOID_DISK2" != "none" ]]; then
+         info "[Setting ZFS-Vars for $VOID_DISK2"
+         export BOOT_DISK_2="$VOID_DISK2"
+         export BOOT_PART_2=1
+         export BOOT_DEVICE_2="$(devpart "$VOID_DISK2" 1)"
+         ok "BOOT_DEVICE_2 set to $BOOT_DEVICE_2"
+
+         export POOL_DISK_2="$VOID_DISK2"
+         export POOL_PART_2=3
+         export POOL_DEVICE_2="$(devpart "$VOID_DISK2" 3)"
+         ok "POOL_DEVICE_2 set to $POOL_DEVICE_2"
+     fi
+}
+
+
+wipe_disks() {
+  for i in 1 2; do
+    local boot pool pooldev
+    eval boot="\$BOOT_DISK_${i}"
+    eval pool="\$POOL_DISK_${i}"
+    eval pooldev="\$POOL_DEVICE_${i}"
+
+    info "[Wiping disk $i: $boot]"
+    # Skip if disk i isn't defined
+    [[ -z "$boot" || -z "$pool" ]] && continue
+
+    #info "[Wiping disk $i: $boot]"
+
+    # Clear ZFS labels (prefer the pool partition if we have it)
+    zpool labelclear -f "${pooldev:-$pool}" >/dev/null 2>&1 || true
+    ok "Cleared ZFS labels on ${pooldev:-$pool}"
+
+    # Wipe filesystem signatures
+    wipefs -a "$pool" >/dev/null 2>&1 || true
+    ok "Wiped filesystem signatures on $pool"
+
+    wipefs -a "$boot" >/dev/null 2>&1 || true
+    ok "Wiped filesystem signatures on $boot"
+
+    # Zap partition tables (hard fail if this goes wrong)
+    sgdisk --zap-all "$pool" >/dev/null 2>&1 || { failhard "Failed to zap partition table on $pool"; exit 1; }
+    ok "Zapped partition table on $pool"
+
+    sgdisk --zap-all "$boot" >/dev/null 2>&1 || { failhard "Failed to zap partition table on $boot"; exit 1; }
+    ok "Zapped partition table on $boot"
+
+    # Refresh kernel view
+    partprobe "$boot" >/dev/null 2>&1 || true
+    partprobe "$pool" >/dev/null 2>&1 || true
+  done
+}
+
+
+configure_efi_partitions() {
+    info "[Installing efibootmgr inside new System]"
+    tail_window 4 xchroot /mnt xbps-install -S efibootmgr -y \
+        || { failhard "Failed to install efibootmgr on the new system"; exit 1; }
+    echo -ne "\033[4A\033[0J"
+    ok "Installed efibootmgr on the new system"
+
+
+    if [[ "${VOID_MIRROR}" == true ]]; then
+
+        info "[Creating mirrored EFI partitions]"
+        EFI_MDADM_NAME="md_efi"
+        EFI_MDADM_PATH="/dev/md/$EFI_MDADM_NAME"
+
+        mdadm --create "$EFI_MDADM_NAME" \
+          --metadata=0.9 \
+          --level=1 \
+          --raid-devices=2 \
+          "$BOOT_DEVICE_1" "$BOOT_DEVICE_2" \
+          >/dev/null 2>&1\
+            || { failhard "mdadm mirror creation failed"; exit 1; }
+
+        mkfs.vfat -F32 "$EFI_MDADM_PATH" >/dev/null 2>&1 \
+            || { failhard "EFI filesystem creation failed"; exit 1; }
+
+        EFI_UUID="$(blkid -s UUID -o value "$EFI_MDADM_PATH")"
+        echo "UUID=$EFI_UUID /boot/efi vfat defaults 0 0" >> /mnt/etc/fstab
+
+        mdadm --detail --scan >> /mnt/etc/mdadm.conf
+        ok "EFI RAID1 created successfully"
+
+    else
+        info "[Single EFI partition mode]"
+
+        mkfs.vfat -F32 "$BOOT_DEVICE_1"
+
+        EFI_UUID="$(blkid -s UUID -o value "$BOOT_DEVICE_1")"
+        echo "UUID=$EFI_UUID /boot/efi vfat defaults 0 0" >> /mnt/etc/fstab
+
+        ok "Single EFI partition configured"
+    fi
+
+
+    info "[Mounting EFI]"
+    mkdir -p /mnt/boot/efi >/dev/null 2>&1
+    xchroot /mnt mount /boot/efi \
+        || { failhard "Failed to mount EFI"; exit 1; }
+
+
+    # TODO, ADD LOGIC FOR SINGLE DISK USAGE AND UNIQUE LABELS
+    xchroot /mnt mount -t efivarfs none /sys/firmware/efi/efivars
+    info "[Adding EFI boot entries]"
+    for CUR_DISK in $VOID_DISK1 $VOID_DISK2; do
+      xchroot /mnt efibootmgr -c -d "$CUR_DISK" -p 1 \
+        -L "ZFSBootMenu (Backup) $CUR_DISK" \
+        -l '\EFI\ZBM\VMLINUZ-BACKUP.EFI' \
+            || { failhard "Failed adding boot entry on $CUR_DISK"; exit 1; }
+    
+      xchroot /mnt efibootmgr -c -d "$CUR_DISK" -p 1 \
+        -L "ZFSBootMenu $CUR_DISK" \
+        -l '\EFI\ZBM\VMLINUZ.EFI' \
+            || { failhard "Failed adding boot entry on $CUR_DISK"; exit 1; }
+
+        ok "Successfully added boot entry on $CUR_DISK"
+    done
+
+}
+
+get_zfs_passphrase() {
+  while true; do
+    read -rsp "Enter ZFS passphrase: " p1; echo
+    read -rsp "Confirm ZFS passphrase: " p2; echo
+    [[ -n "$p1" && "$p1" == "$p2" ]] && { ZFS_PASSPHRASE="$p1"; return 0; }
+    echo "Passphrases did not match or were empty — try again."
+  done
+}
+
+create_zpool() {
+  [[ -z "${POOL_DEVICE_1:-}" ]] && { failhard "POOL_DEVICE_1 not set"; exit 1; }
+
+  # Ask user for passphrase once (our own function)
+  get_zfs_passphrase
+
+  if [[ "${VOID_MIRROR:-false}" == true && -n "${POOL_DEVICE_2:-}" && "$POOL_DEVICE_2" != "none" ]]; then
+    info "[Creating encrypted ZFS pool 'zroot' as MIRROR]"
+
+    printf '%s\n%s\n' "$ZFS_PASSPHRASE" "$ZFS_PASSPHRASE" | zpool create -f \
+      -o ashift=12 \
+      -O compression=zstd \
+      -O acltype=posixacl \
+      -O xattr=sa \
+      -O relatime=on \
+      -O dnodesize=auto \
+      -O normalization=formD \
+      -O mountpoint=none \
+      -O encryption=aes-256-gcm \
+      -O keyformat=passphrase \
+      -O keylocation=prompt \
+      zroot mirror "$POOL_DEVICE_1" "$POOL_DEVICE_2" >/dev/null 2>&1 \
+        || { failhard "ZFS pool creation (mirror) failed"; unset ZFS_PASSPHRASE; exit 1; }
+
+    ok "Created 'zroot' mirror: $POOL_DEVICE_1 + $POOL_DEVICE_2"
+  else
+    info "[Creating encrypted ZFS pool 'zroot' on SINGLE DISK]"
+
+    printf '%s\n%s\n' "$ZFS_PASSPHRASE" "$ZFS_PASSPHRASE" | zpool create -f \
+      -o ashift=12 \
+      -O compression=zstd \
+      -O acltype=posixacl \
+      -O xattr=sa \
+      -O relatime=on \
+      -O dnodesize=auto \
+      -O normalization=formD \
+      -O mountpoint=none \
+      -O encryption=aes-256-gcm \
+      -O keyformat=passphrase \
+      -O keylocation=prompt \
+      zroot "$POOL_DEVICE_1" >/dev/null 2>&1 \
+        || { failhard "ZFS pool creation (single) failed"; unset ZFS_PASSPHRASE; exit 1; }
+
+    ok "Created 'zroot' on $POOL_DEVICE_1"
+  fi
+
+  # cleanup passphrase from memory
+  unset ZFS_PASSPHRASE
+}
+
+create_zfs_datasets() {
+  info "[Creating initial ZFS datasets]"
+
+  zfs create -o mountpoint=none zroot/ROOT \
+    || { failhard "Failed to create zroot/ROOT"; exit 1; }
+
+  zfs create -o mountpoint=/ -o canmount=noauto zroot/ROOT/"$ID" \
+    || { failhard "Failed to create zroot/ROOT/$ID"; exit 1; }
+
+  zfs create -o mountpoint=/home zroot/home \
+    || { failhard "Failed to create zroot/home"; exit 1; }
+
+  zpool set bootfs=zroot/ROOT/"$ID" zroot \
+    || { failhard "Failed to set bootfs property"; exit 1; }
+
+  ok "Created initial datasets (bootfs=zroot/ROOT/$ID)"
+}
+
+
+
+# taken from
+# https://docs.zfsbootmenu.org/en/v3.0.x/guides/void-linux/uefi.html
+setup_zfs() {
+    source /etc/os-release
+    export ID
+    zgenhostid -f
+    modprobe zfs
+    create_zpool
+    create_zfs_datasets
+    zpool export zroot
+    zpool import -N -R /mnt zroot
+    zfs load-key -L prompt zroot
+    zfs mount zroot/ROOT/${ID}
+    zfs mount zroot/home
+    udevadm trigger
+}
+
+get_architecture() {
+    XBPS_ARCH="$(uname -m)"
+    ok "Architecture set to $XBPS_ARCH"
+}
+
+tail_window() { # tail_window <N> <command...>
+  local N="${1:-5}"; shift
+  local log="/tmp/xbps-install.log"
+
+  # Colors
+  LG="\033[1;32m"
+  NC="\033[0m"
+
+  "$@" 2>&1 \
+  | tee "$log" \
+  | awk -v N="$N" -v LG="$LG" -v NC="$NC" '
+      BEGIN{c=0}
+      {
+        # how many lines were on screen previously
+        shown = (c < N ? c : N)
+        # move cursor up and clear those lines
+        for (i=0; i<shown; i++) printf "\033[1A\033[2K"
+        # add new line to ring buffer
+        buf[c%N]=$0; c++
+        # (re)print the last N (or fewer) lines, colored
+        start = (c > N ? c-N : 0)
+        for (j=start; j<c; j++) print LG buf[j%N] NC
+        fflush()
+      }'
+  rc=${PIPESTATUS[0]} # exit code
+  return "$rc"
+}
+
+
+
+# Show only the last N lines of a running command,
+# Used when installing packages
+# tail_window() { # tail_window <N> <command...>
+#   local N="${1:-5}"; shift
+#   local log="/tmp/xbps-install.log"
+# 
+#   set -o pipefail
+#   "$@" 2>&1 \
+#   | tee "$log" \
+#   | awk -v N="$N" '
+#       BEGIN{c=0}
+#       {
+#         # how many lines were on screen previously
+#         shown = (c < N ? c : N)
+#         # move cursor up and clear those lines
+#         for (i=0; i<shown; i++) printf "\033[1A\033[2K"
+#         # add new line to ring buffer
+#         buf[c%N]=$0; c++
+#         # (re)print the last N (or fewer) lines
+#         start = (c > N ? c-N : 0)
+#         for (j=start; j<c; j++) print buf[j%N]
+#         fflush()
+#       }'
+#   rc=${PIPESTATUS[0]} # exit code
+#   return "$rc"
+# }
+
+
+install_base_system() {
+    info "[Get architecture]"
+    get_architecture
+    info "[Copying xbps-mirror-keys]"
+    mkdir -p /mnt/var/db/xbps/keys && \
+    cp -r /var/db/xbps/keys /mnt/var/db/xbps \
+        || { failhard "Failed to copy xbps-mirror-keys"; exit 1; }
+    ok "Copied xbps-keys into base-system"
+
+    info "[Installing base-system]"
+    tail_window 7 xbps-install -S -R "$VOID_REPO_MIRROR" -r /mnt base-system -y \
+        || { failhard "Failed to install base-system via xbps-install"; exit 1; }
+    echo -ne "\033[7A\033[0J"
+    ok "Installed base-System to /mnt/zfs"
+    cp /etc/hostid /mnt/etc
+}
+
+
+# install_base_system() {
+#     info "[Installing base-system]"
+#     get_architecture
+#     info "[Copying xbps-mirror-keys]"
+#     mkdir -p /mnt/var/db/xbps/keys && \
+#     cp -r /var/db/xbps/keys /mnt/var/db/xbps \
+#         || { failhard "Failed to copy xbps-mirror-keys"; exit 1; }
+#     ok "Copied xbps-keys into base-system"
+# 
+#     xbps-install -Sy -R $VOID_REPO_MIRROR -r /mnt base-system -y \
+#         || { failhard "Failed to install base-system via xbps-install"; exit 1; }
+#     ok "Installed base-System to /mnt/zfs"
+# }
+
+configure_rc_conf() {
+    info "[Writing rc.conf]"
+
+    # this syntax is a bit wonky, because treesitter does not like redirects after {} otherwise.
+    {
+      echo "KEYMAP=\"$VOID_KEYMAP\""
+      echo "HARDWARECLOCK=\"$VOID_HWCLOCK\""
+    } > /mnt/etc/rc.conf \
+        || { failhard "Failed to write to /mnt/etc/rc.conf"; exit 1; }
+    ok "Wrote rc.conf"
+}
+
+# used in "configure_glibc_locales"
+is_glibc() {
+  xchroot /mnt ldd --version 2>&1 | grep -qi 'libc'
+}
+
+
+configure_glibc_locales() {
+  if is_glibc; then
+    info "[glibc detected: configuring locales]"
+    {
+      echo "en_US.UTF-8 UTF-8"
+      echo "en_US ISO-8859-1"
+    } >> /mnt/etc/default/libc-locales > /dev/null 2>&1 \
+        || { failhard "Failed to write to /mnt/etc/default/libc-locales"; exit 1; }
+    ok "Wrote /mnt/etc/default/libc-locales"
+
+    xchroot /mnt xbps-reconfigure -f glibc-locales \
+      || { failhard "Failed to reconfigure glibc-locales"; exit 1; }
+
+  else
+    info "[musl detected — skipping locale configuration]"
+  fi
+  ok "Configured Locales"
+}
+
+configure_dracut() {
+    info "[Writing dracut config for zfs]"
+    {
+      echo 'nofsck="yes"'
+      echo 'add_"nofsdracutmodules+=" zfs "'
+      echo 'omit"nofs_dracutmodules+=" btrfs "'
+    } >> /mnt/etc/dracut.conf.d/zol.conf \
+        || { failhard "Failed to write to /mnt/etc/dracut.conf.d/zol.conf"; exit 1; }
+    ok "Wrote dracut config."
+}
+
+configure_system() {
+    info "[Configuring new System]"
+    configure_rc_conf
+    info "[Setting Timezone to $VOID_TIMEZONE]"
+    xchroot /mnt ln -sf "/usr/share/zoneinfo/$VOID_TIMEZONE" /etc/localtime >/dev/null 2>&1 \
+        || { failhard "Failed to set timezone"; exit 1; }
+    ok "Set timezone to $VOID_TIMEZONE"
+    configure_glibc_locales
+    configure_dracut
+    info "[Installing ZFS to new system (Needs compilation so this might take a while)]"
+    tail_window 4 xchroot /mnt xbps-install -S zfs -y \
+        || { failhard "Failed to install zfs on the new system"; exit 1; }
+    echo -ne "\033[4A\033[0J"
+    ok "Installed zfs on the new system"
+
+    
+    info "Configuring ZFS datasets for ZFSBootMenu"
+    xchroot /mnt zfs set org.zfsbootmenu:commandline="quiet" zroot/ROOT >/dev/null 2>&1 \
+        || { failhard "Failed to configure zfs dataset"; exit 1; }
+}
+
+
+setup_zfsbootmenu() {
+    info "[Installing zfsbootmenu + boot packages inside chroot]"
+    tail_window 4 xchroot /mnt xbps-install -S zfsbootmenu systemd-boot-efistub mdadm -y \
+        || { failhard "Failed to install zfsbootmenu on the new system"; exit 1; }
+    echo -ne "\033[4A\033[0J"
+    ok "Installed zfsbootmenu on the new system"
+
+    # default config but modified to match the guide at:
+    # https://docs.zfsbootmenu.org/en/v3.0.x/guides/void-linux/uefi.html
+    {
+      echo "Global:"
+      echo "  ManageImages: true"
+      echo "  BootMountPoint: /boot/efi"
+      echo "  DracutConfDir: /etc/zfsbootmenu/dracut.conf.d"
+      echo "  PreHooksDir: /etc/zfsbootmenu/generate-zbm.pre.d"
+      echo "  PostHooksDir: /etc/zfsbootmenu/generate-zbm.post.d"
+      echo "  InitCPIOConfig: /etc/zfsbootmenu/mkinitcpio.conf"
+      echo "  KeyCache: true"
+      echo "Components:"
+      echo "  ImageDir: /boot/efi/EFI/zbm"
+      echo "  Versions: 3"
+      echo "  Enabled: false"
+      echo "EFI:"
+      echo "  ImageDir: /boot/efi/EFI/zbm"
+      echo "  Version: false"
+      echo "  Enabled: true"
+      echo "  SplashImage: /etc/zfsbootmenu/splash.bmp"
+      echo "Kernel:"
+      echo "  CommandLine: quiet loglevel=0"
+    } > /mnt/etc/zfsbootmenu/config.yaml \
+        || { failhard "Failed to write to /mnt/zfsbootmenu/config.yaml"; exit 1; }
+    ok "Wrote config to /mnt/zfsbootmenu/config.yaml"
+
+    xchroot /mnt generate-zbm >/dev/null 2>&1 \
+        || { failhard "Failed to generate-zbm"; exit 1; }
+    ok "Generated ZBM"
+
+}
+
+setup_user() {
+    info "[Creating user: $VOID_SUDOUSER]"
+
+    # Create user and add to wheel group
+    xchroot /mnt useradd -m -G wheel "$VOID_SUDOUSER" >/dev/null 2>&1 \
+        || { failhard "Failed to create user $VOID_SUDOUSER"; exit 1; }
+    ok "Created user '$VOID_SUDOUSER' and added to group 'wheel'"
+
+    # Prompt for password interactively inside chroot
+    note "Set a password for '$VOID_SUDOUSER'"
+    xchroot /mnt passwd "$VOID_SUDOUSER"
+
+    # Configure sudoers for wheel group
+    info "[Configuring sudoers for wheel group]"
+    echo "%wheel ALL=(ALL:ALL) ALL" > /mnt/etc/sudoers.d/wheel
+    chmod 440 /mnt/etc/sudoers.d/wheel \
+        || { failhard "Failed to set correct permissions on /mnt/etc/sudoers.d/wheel"; exit 1; }
+    ok "Configured sudoers (440) for wheel group"
+}
 
 
 # ENTRY:
@@ -337,3 +844,15 @@ while true; do
   esac
 done
 print_postconf_header
+set_zfs_vars
+wipe_disks
+partition_disks
+setup_zfs
+install_base_system
+configure_efi_partitions
+configure_system
+setup_zfsbootmenu
+setup_user
+echo $VOID_HOSTNAME > /mnt/etc/hostname
+umount -n -R /mnt
+zpool export zroot
