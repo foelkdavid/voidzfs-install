@@ -331,6 +331,7 @@ get_inputs() {
     print_preconf_header
 }
 
+
 # Formats the following way:
 # 512 -> EFI
 # $VOID_SWAPSIZE -> swap
@@ -453,27 +454,17 @@ configure_efi_partitions() {
 
 
     if [[ "${VOID_MIRROR}" == true ]]; then
+        info "[Creating EFI partitions for both disks]"
+        mkfs.vfat -F32 "$BOOT_DEVICE_1"
+        mkfs.vfat -F32 "$BOOT_DEVICE_2"
 
-        info "[Creating mirrored EFI partitions]"
-        EFI_MDADM_NAME="md_efi"
-        EFI_MDADM_PATH="/dev/md/$EFI_MDADM_NAME"
+        EFI1_UUID="$(blkid -s UUID -o value "$BOOT_DEVICE_1")"
+        echo "UUID=$EFI1_UUID /boot/efi vfat defaults,nofail 0 0" >> /mnt/etc/fstab
 
-        mdadm --create "$EFI_MDADM_NAME" \
-          --metadata=0.9 \
-          --level=1 \
-          --raid-devices=2 \
-          "$BOOT_DEVICE_1" "$BOOT_DEVICE_2" \
-          >/dev/null 2>&1\
-            || { failhard "mdadm mirror creation failed"; exit 1; }
+        EFI2_UUID="$(blkid -s UUID -o value "$BOOT_DEVICE_2")"
+        echo "UUID=$EFI2_UUID /boot/efi2 vfat defaults,nofail 0 0" >> /mnt/etc/fstab
 
-        mkfs.vfat -F32 "$EFI_MDADM_PATH" >/dev/null 2>&1 \
-            || { failhard "EFI filesystem creation failed"; exit 1; }
-
-        EFI_UUID="$(blkid -s UUID -o value "$EFI_MDADM_PATH")"
-        echo "UUID=$EFI_UUID /boot/efi vfat defaults 0 0" >> /mnt/etc/fstab
-
-        mdadm --detail --scan >> /mnt/etc/mdadm.conf
-        ok "EFI RAID1 created successfully"
+        ok "Dual EFI partitions configured"
 
     else
         info "[Single EFI partition mode]"
@@ -487,28 +478,31 @@ configure_efi_partitions() {
     fi
 
 
-    info "[Mounting EFI]"
+    info "[Mounting EFI1]"
     mkdir -p /mnt/boot/efi >/dev/null 2>&1
     xchroot /mnt mount /boot/efi \
-        || { failhard "Failed to mount EFI"; exit 1; }
+        || { failhard "Failed to mount EFI1"; exit 1; }
+
+    info "[Mounting EFI2]"
+    mkdir -p /mnt/boot/efi2 >/dev/null 2>&1
+    xchroot /mnt mount /boot/efi2 \
+        || { failhard "Failed to mount EFI2"; exit 1; }
 
 
     # TODO, ADD LOGIC FOR SINGLE DISK USAGE AND UNIQUE LABELS
+
     xchroot /mnt mount -t efivarfs none /sys/firmware/efi/efivars
     info "[Adding EFI boot entries]"
     for CUR_DISK in $VOID_DISK1 $VOID_DISK2; do
-      xchroot /mnt efibootmgr -c -d "$CUR_DISK" -p 1 \
-        -L "ZFSBootMenu (Backup) $CUR_DISK" \
-        -l '\EFI\ZBM\VMLINUZ-BACKUP.EFI' \
-            || { failhard "Failed adding boot entry on $CUR_DISK"; exit 1; }
-    
-      xchroot /mnt efibootmgr -c -d "$CUR_DISK" -p 1 \
-        -L "ZFSBootMenu $CUR_DISK" \
-        -l '\EFI\ZBM\VMLINUZ.EFI' \
-            || { failhard "Failed adding boot entry on $CUR_DISK"; exit 1; }
 
-        ok "Successfully added boot entry on $CUR_DISK"
+        xchroot /mnt efibootmgr -c -d "$CUR_DISK" -p 1 \
+          -L "ZFSBootMenu ($CUR_DISK)" \
+          -l '\EFI\zbm\vmlinuz.EFI' \
+            || { failhard "Failed adding boot entry for $CUR_DISK"; exit 1; }
+
+        ok "Successfully added boot entries for $CUR_DISK"
     done
+
 
 }
 
@@ -542,7 +536,10 @@ create_zpool() {
       -O encryption=aes-256-gcm \
       -O keyformat=passphrase \
       -O keylocation=prompt \
-      zroot mirror "$POOL_DEVICE_1" "$POOL_DEVICE_2" >/dev/null 2>&1 \
+      #zroot mirror "$POOL_DEVICE_1" "$POOL_DEVICE_2" >/dev/null 2>&1 \
+      zroot mirror \
+        /dev/disk/by-partuuid/$(blkid -s PARTUUID -o value "$POOL_DEVICE_1") \
+        /dev/disk/by-partuuid/$(blkid -s PARTUUID -o value "$POOL_DEVICE_2") \
         || { failhard "ZFS pool creation (mirror) failed"; unset ZFS_PASSPHRASE; exit 1; }
 
     ok "Created 'zroot' mirror: $POOL_DEVICE_1 + $POOL_DEVICE_2"
@@ -775,7 +772,7 @@ configure_system() {
 
 setup_zfsbootmenu() {
     info "[Installing zfsbootmenu + boot packages inside chroot]"
-    tail_window 4 xchroot /mnt xbps-install -S zfsbootmenu systemd-boot-efistub mdadm -y \
+    tail_window 4 xchroot /mnt xbps-install -S zfsbootmenu systemd-boot-efistub mdadm rsync -y \
         || { failhard "Failed to install zfsbootmenu on the new system"; exit 1; }
     echo -ne "\033[4A\033[0J"
     ok "Installed zfsbootmenu on the new system"
@@ -810,6 +807,13 @@ setup_zfsbootmenu() {
         || { failhard "Failed to generate-zbm"; exit 1; }
     ok "Generated ZBM"
 
+    # after: ok "Generated ZBM"
+
+    # put a UEFI fallback on disk1 (source ESP)
+    mkdir -p /mnt/boot/efi/EFI/BOOT
+    cp -f /mnt/boot/efi/EFI/zbm/vmlinuz.EFI /mnt/boot/efi/EFI/BOOT/BOOTX64.EFI
+
+
 }
 
 setup_user() {
@@ -830,6 +834,14 @@ setup_user() {
     chmod 440 /mnt/etc/sudoers.d/wheel \
         || { failhard "Failed to set correct permissions on /mnt/etc/sudoers.d/wheel"; exit 1; }
     ok "Configured sudoers (440) for wheel group"
+}
+
+sync_esps() {
+  [[ "${VOID_MIRROR}" == true && -n "${BOOT_DEVICE_2:-}" && "$BOOT_DEVICE_2" != "none" ]] || return 0
+  info "[One-time sync: /boot/efi/EFI/zbm -> /boot/efi2/EFI/zbm]"
+  xchroot /mnt rsync -a --delete /boot/efi/ /boot/efi2 \
+          || { failhard "One-time ESP sync failed"; exit 1; }
+  ok "Synced secondary ESP"
 }
 
 
@@ -854,5 +866,7 @@ configure_system
 setup_zfsbootmenu
 setup_user
 echo $VOID_HOSTNAME > /mnt/etc/hostname
+sync_esps
 umount -n -R /mnt
 zpool export zroot
+
