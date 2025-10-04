@@ -1,9 +1,10 @@
 # voidzfs-install
 Interactive Voidlinux on ZFS installer (optional with zfs-mirror)
 
-TODO: - Single-Disk setup is not tested aswell, coming soon...
-TODO: - Custom services for Snapshotting and EFI-Syncing
-TODO: - Test and finish implementation of single-disk setup
+## TODO
+- Single-Disk setup is not tested aswell, coming soon...
+- Custom services for Snapshotting and EFI-Syncing
+- Test and finish implementation of single-disk setup
 
 ## Howto:
 1. Download the latest hrmpf image.
