@@ -880,11 +880,11 @@ setup_swap() {
     export SWAPPART_DISK_2="$(devpart "$VOID_DISK1" 2)"
     sudo mkswap $SWAPPART_DISK_1
     sudo mkswap $SWAPPART_DISK_2
-    SWAP2_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_1")"
-    echo "UUID=$SWAP1_UUID /boot/efi none swap defaults,nofail 0 0" >> /mnt/etc/fstab
+    SWAP1_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_1")"
+    echo "UUID=$SWAP1_UUID none swap defaults,nofail 0 0" >> /mnt/etc/fstab
 
     SWAP2_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_2")"
-    echo "UUID=$SWAP2_UUID /boot/efi2 none swap defaults,nofail 0 0" >> /mnt/etc/fstab
+    echo "UUID=$SWAP2_UUID none swap defaults,nofail 0 0" >> /mnt/etc/fstab
 }
 
 # ENTRY:
