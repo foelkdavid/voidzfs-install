@@ -507,24 +507,45 @@ configure_efi_partitions() {
 }
 
 get_zfs_passphrase() {
+  info "[Make sure your ZFS passphrase works with a US keyboard layout!]"
   while true; do
     read -rsp "Enter ZFS passphrase: " p1; echo
     read -rsp "Confirm ZFS passphrase: " p2; echo
     [[ -n "$p1" && "$p1" == "$p2" ]] && { ZFS_PASSPHRASE="$p1"; return 0; }
     echo "Passphrases did not match or were empty — try again."
   done
+
 }
 
+get_user_password() {
+  while true; do
+    read -rsp "Enter User password: " p1; echo
+    read -rsp "Confirm User password: " p2; echo
+    [[ -n "$p1" && "$p1" == "$p2" ]] && { USER_PASSWORD="$p1"; return 0; }
+    echo "Passphrases did not match or were empty — try again."
+  done
+
+}
+
+set_user_password() {
+  # Requires: $VOID_SUDOUSER, $USER_PASSWORD
+  echo "[Setting password for $VOID_SUDOUSER inside chroot]"
+  echo -e "${USER_PASSWORD}\n${USER_PASSWORD}" | xchroot /mnt passwd "$VOID_SUDOUSER"
+}
+
+
+# TODO: - optimize parameters here
+# TODO: - Test on single disk (lowprio rn)
 create_zpool() {
   [[ -z "${POOL_DEVICE_1:-}" ]] && { failhard "POOL_DEVICE_1 not set"; exit 1; }
 
-  # Ask user for passphrase once (our own function)
-  get_zfs_passphrase
+
 
   if [[ "${VOID_MIRROR:-false}" == true && -n "${POOL_DEVICE_2:-}" && "$POOL_DEVICE_2" != "none" ]]; then
     info "[Creating encrypted ZFS pool 'zroot' as MIRROR]"
 
-    printf '%s\n%s\n' "$ZFS_PASSPHRASE" "$ZFS_PASSPHRASE" | zpool create -f \
+#    printf '%s\n%s\n' "$ZFS_PASSPHRASE" "$ZFS_PASSPHRASE" | zpool create -f \
+    zpool create -f \
       -o ashift=12 \
       -O compression=zstd \
       -O acltype=posixacl \
@@ -534,9 +555,8 @@ create_zpool() {
       -O normalization=formD \
       -O mountpoint=none \
       -O encryption=aes-256-gcm \
+      -O keylocation=file:///etc/zfs/zroot.key \
       -O keyformat=passphrase \
-      -O keylocation=prompt \
-      #zroot mirror "$POOL_DEVICE_1" "$POOL_DEVICE_2" >/dev/null 2>&1 \
       zroot mirror \
         /dev/disk/by-partuuid/$(blkid -s PARTUUID -o value "$POOL_DEVICE_1") \
         /dev/disk/by-partuuid/$(blkid -s PARTUUID -o value "$POOL_DEVICE_2") \
@@ -545,6 +565,7 @@ create_zpool() {
     ok "Created 'zroot' mirror: $POOL_DEVICE_1 + $POOL_DEVICE_2"
   else
     info "[Creating encrypted ZFS pool 'zroot' on SINGLE DISK]"
+    failhard "NOT IMPLEMENTED"; unset ZFS_PASSPHRASE; exit 1;
 
     printf '%s\n%s\n' "$ZFS_PASSPHRASE" "$ZFS_PASSPHRASE" | zpool create -f \
       -o ashift=12 \
@@ -591,6 +612,8 @@ create_zfs_datasets() {
 # taken from
 # https://docs.zfsbootmenu.org/en/v3.0.x/guides/void-linux/uefi.html
 setup_zfs() {
+    echo $ZFS_PASSPHRASE > /etc/zfs/zroot.key
+    chmod 000 /etc/zfs/zroot.key
     source /etc/os-release
     export ID
     zgenhostid -f
@@ -599,7 +622,7 @@ setup_zfs() {
     create_zfs_datasets
     zpool export zroot
     zpool import -N -R /mnt zroot
-    zfs load-key -L prompt zroot
+    zfs load-key -L file:///etc/zfs/zroot.key zroot
     zfs mount zroot/ROOT/${ID}
     zfs mount zroot/home
     udevadm trigger
@@ -668,6 +691,19 @@ tail_window() { # tail_window <N> <command...>
 # }
 
 
+configure_dracut() {
+    info "[Writing dracut config for zfs]"
+
+    {
+      echo 'nofsck="yes"'
+      echo 'add_dracutmodules+=" zfs "'
+      echo 'omit_dracutmodules+=" btrfs "'
+      echo 'install_items+=" /etc/zfs/zroot.key "'
+    } >> /mnt/etc/dracut.conf.d/zol.conf \
+        || { failhard "Failed to write to /mnt/etc/dracut.conf.d/zol.conf"; exit 1; }
+    ok "Wrote dracut config."
+}
+
 install_base_system() {
     info "[Get architecture]"
     get_architecture
@@ -683,6 +719,10 @@ install_base_system() {
     echo -ne "\033[7A\033[0J"
     ok "Installed base-System to /mnt/zfs"
     cp /etc/hostid /mnt/etc
+    mkdir -p /mnt/etc/zfs
+    cp /etc/zfs/zroot.key /mnt/etc/zfs
+    configure_dracut
+
 }
 
 
@@ -732,21 +772,11 @@ configure_glibc_locales() {
       || { failhard "Failed to reconfigure glibc-locales"; exit 1; }
 
   else
-    info "[musl detected — skipping locale configuration]"
+    info "[musl detected - skipping locale configuration]"
   fi
   ok "Configured Locales"
 }
 
-configure_dracut() {
-    info "[Writing dracut config for zfs]"
-    {
-      echo 'nofsck="yes"'
-      echo 'add_"nofsdracutmodules+=" zfs "'
-      echo 'omit"nofs_dracutmodules+=" btrfs "'
-    } >> /mnt/etc/dracut.conf.d/zol.conf \
-        || { failhard "Failed to write to /mnt/etc/dracut.conf.d/zol.conf"; exit 1; }
-    ok "Wrote dracut config."
-}
 
 configure_system() {
     info "[Configuring new System]"
@@ -756,7 +786,6 @@ configure_system() {
         || { failhard "Failed to set timezone"; exit 1; }
     ok "Set timezone to $VOID_TIMEZONE"
     configure_glibc_locales
-    configure_dracut
     info "[Installing ZFS to new system (Needs compilation so this might take a while)]"
     tail_window 4 xchroot /mnt xbps-install -S zfs -y \
         || { failhard "Failed to install zfs on the new system"; exit 1; }
@@ -826,7 +855,8 @@ setup_user() {
 
     # Prompt for password interactively inside chroot
     note "Set a password for '$VOID_SUDOUSER'"
-    xchroot /mnt passwd "$VOID_SUDOUSER"
+    set_user_password
+    #xchroot /mnt passwd "$VOID_SUDOUSER"
 
     # Configure sudoers for wheel group
     info "[Configuring sudoers for wheel group]"
@@ -844,6 +874,18 @@ sync_esps() {
   ok "Synced secondary ESP"
 }
 
+# TODO: add setup for single disk, dont have time rn
+setup_swap() {
+    export SWAPPART_DISK_1="$(devpart "$VOID_DISK1" 2)"
+    export SWAPPART_DISK_2="$(devpart "$VOID_DISK1" 2)"
+    sudo mkswap $SWAPPART_DISK_1
+    sudo mkswap $SWAPPART_DISK_2
+    SWAP2_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_1")"
+    echo "UUID=$SWAP1_UUID /boot/efi none swap defaults,nofail 0 0" >> /mnt/etc/fstab
+
+    SWAP2_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_2")"
+    echo "UUID=$SWAP2_UUID /boot/efi2 none swap defaults,nofail 0 0" >> /mnt/etc/fstab
+}
 
 # ENTRY:
 while true; do
@@ -856,6 +898,11 @@ while true; do
   esac
 done
 print_postconf_header
+echo
+get_user_password
+echo
+get_zfs_passphrase
+print_postconf_header
 set_zfs_vars
 wipe_disks
 partition_disks
@@ -864,6 +911,7 @@ install_base_system
 configure_efi_partitions
 configure_system
 setup_zfsbootmenu
+setup_swap
 setup_user
 echo $VOID_HOSTNAME > /mnt/etc/hostname
 sync_esps
