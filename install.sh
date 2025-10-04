@@ -512,7 +512,7 @@ get_zfs_passphrase() {
     read -rsp "Enter ZFS passphrase: " p1; echo
     read -rsp "Confirm ZFS passphrase: " p2; echo
     [[ -n "$p1" && "$p1" == "$p2" ]] && { ZFS_PASSPHRASE="$p1"; return 0; }
-    echo "Passphrases did not match or were empty — try again."
+    echo "Passphrases did not match or were empty - try again."
   done
 
 }
@@ -522,7 +522,7 @@ get_user_password() {
     read -rsp "Enter User password: " p1; echo
     read -rsp "Confirm User password: " p2; echo
     [[ -n "$p1" && "$p1" == "$p2" ]] && { USER_PASSWORD="$p1"; return 0; }
-    echo "Passphrases did not match or were empty — try again."
+    echo "Passphrases did not match or were empty - try again."
   done
 
 }
