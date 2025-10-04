@@ -1,6 +1,10 @@
 # voidzfs-install
 Interactive Voidlinux on ZFS installer (optional with zfs-mirror)
 
+<img width="50%" height="50%" alt="image" src="https://github.com/user-attachments/assets/e9036490-1053-4d29-b139-d70d9176a81a" />
+
+
+
 ## TODO
 - Single-Disk setup is not tested aswell, coming soon...
 - Custom services for Snapshotting and EFI-Syncing
