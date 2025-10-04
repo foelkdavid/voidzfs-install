@@ -700,32 +700,6 @@ tail_window() { # tail_window <N> <command...>
 	return "$rc"
 }
 
-# Show only the last N lines of a running command,
-# Used when installing packages
-# tail_window() { # tail_window <N> <command...>
-#   local N="${1:-5}"; shift
-#   local log="/tmp/xbps-install.log"
-#
-#   set -o pipefail
-#   "$@" 2>&1 \
-#   | tee "$log" \
-#   | awk -v N="$N" '
-#       BEGIN{c=0}
-#       {
-#         # how many lines were on screen previously
-#         shown = (c < N ? c : N)
-#         # move cursor up and clear those lines
-#         for (i=0; i<shown; i++) printf "\033[1A\033[2K"
-#         # add new line to ring buffer
-#         buf[c%N]=$0; c++
-#         # (re)print the last N (or fewer) lines
-#         start = (c > N ? c-N : 0)
-#         for (j=start; j<c; j++) print buf[j%N]
-#         fflush()
-#       }'
-#   rc=${PIPESTATUS[0]} # exit code
-#   return "$rc"
-# }
 
 configure_dracut() {
 	info "[Writing dracut config for zfs]"
@@ -770,19 +744,6 @@ install_base_system() {
 
 }
 
-# install_base_system() {
-#     info "[Installing base-system]"
-#     get_architecture
-#     info "[Copying xbps-mirror-keys]"
-#     mkdir -p /mnt/var/db/xbps/keys && \
-#     cp -r /var/db/xbps/keys /mnt/var/db/xbps \
-#         || { failhard "Failed to copy xbps-mirror-keys"; exit 1; }
-#     ok "Copied xbps-keys into base-system"
-#
-#     xbps-install -Sy -R $VOID_REPO_MIRROR -r /mnt base-system -y \
-#         || { failhard "Failed to install base-system via xbps-install"; exit 1; }
-#     ok "Installed base-System to /mnt/zfs"
-# }
 
 configure_rc_conf() {
 	info "[Writing rc.conf]"
