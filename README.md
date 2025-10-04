@@ -1,6 +1,9 @@
 # voidzfs-install
 Interactive Voidlinux on ZFS installer (optional with zfs-mirror)
 
+TODO: - Single-Disk setup is not tested aswell, coming soon...
+TODO: - Custom services for Snapshotting and EFI-Syncing
+TODO: - Test and finish implementation of single-disk setup
 
 ## Howto:
 1. Download the latest hrmpf image.
@@ -9,12 +12,13 @@ Interactive Voidlinux on ZFS installer (optional with zfs-mirror)
 ## Features:
 - Boots from ZFSBootMenu
 - Optional Encryption
-- Optional Raid1/Mirror Setup
-    - RAID1 mirrored EFI-Partitions via mdadm
+- Optional ZFS-Mirror Setup
+    - Two EFI-Partitions for true redundance
+        - synced once after installation, then synced continuously by custom service (TODO)
     - ZFS-Mirrored System Partitions
 - Optional Swap
 - Creates additional dataset for /home
-- Provides runit services for automatic Snapshotting
+- Provides runit services for automatic Snapshotting + continuous EFI-Syncing (TODO
 
 **This requires UEFI to boot.**
 
