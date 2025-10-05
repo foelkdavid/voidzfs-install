@@ -1,0 +1,19 @@
+#!/bin/sh
+# Always runs after the service exits — even after `sv kill`
+
+STATE="/var/lib/zfs-autosnap"
+
+# 1) Kill any lingering snooze tied to our state timefiles
+#    Match the -t <timefile> arg to avoid nuking unrelated snooze jobs.
+#    Try TERM first, then KILL as a backstop.
+pkill -TERM -f "^[[:alnum:]/._-]*snooze .* -t ${STATE}/[^ ]*\.timefile" 2>/dev/null
+sleep 0.5
+pkill -KILL -f "^[[:alnum:]/._-]*snooze .* -t ${STATE}/[^ ]*\.timefile" 2>/dev/null
+
+# 2) Also kill any immediate /bin/sh -c wrappers still around (rare)
+pkill -TERM -P $$ 2>/dev/null
+sleep 0.2
+pkill -KILL -P $$ 2>/dev/null
+
+exit 0
+
