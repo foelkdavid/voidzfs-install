@@ -80,9 +80,15 @@ zfscheck() {
 
 servicecheck() {
 	local files=(
-		"efisync/efisync.sh"
-		"efisync/efisync/run"
-		"efisync/efisync/log/run"
+		"services/efisync/efisync.sh"
+		"services/efisync/efisync/run"
+		"services/efisync/efisync/log/run"
+
+		"services/zfs-autosnap/zfs-autosnap.sh"
+		"services/zfs-autosnap/jobs.conf"
+		"services/zfs-autosnap/zfs-autosnap/run"
+		"services/zfs-autosnap/zfs-autosnap/finish"
+		"services/zfs-autosnap/zfs-autosnap/log/run"
 	)
 
 	for f in "${files[@]}"; do
@@ -957,18 +963,18 @@ install_efisync() {
 
 	tail_window 4 xchroot /mnt xbps-install -S rsync inotify-tools util-linux -y ||
 		{
-			failhard "Failed to install efibootmgr on the new system"
+			failhard "Failed to install efisync-dependencies on the new system"
 			exit 1
 		}
 
-	cp -r $PWD/efisync/efisync /mnt/etc/sv/ ||
+	cp -r $PWD/services/efisync/efisync /mnt/etc/sv/ ||
 		{
 			failhard "Failed to copy efisync runit service"
 			exit 1
 		}
 	ok "/mnt/etc/sv/efisync"
 
-	cp $PWD/efisync/efisync.sh /mnt/usr/local/bin ||
+	cp $PWD/services/efisync/efisync.sh /mnt/usr/local/bin ||
 		{
 			failhard "Failed to copy efisync script"
 			exit 1
@@ -981,14 +987,47 @@ install_efisync() {
 			exit 1
 		}
 	ok "ensure executable perimssions for efisync"
-	#
-	#     xchroot /mnt ln -s /etc/sv/efisync /var/service/ ||
-	# 		{
-	# 			failhard "Failed to link efisync-runit-service"
-	# 			exit 1
-	# 		}
 	ok "Skipped linking efisync-runit service"
-	#
+}
+
+install_zfs-autosnap() {
+	info ["Installing zfs-autosnap-runit-service"]
+
+	tail_window 4 xchroot /mnt xbps-install -S snooze -y ||
+		{
+			failhard "Failed to install snooze on the new system"
+			exit 1
+		}
+
+	cp -r $PWD/services/zfs-autosnap/zfs-autosnap /mnt/etc/sv/ ||
+		{
+			failhard "Failed to copy zfs-autosnap runit service"
+			exit 1
+		}
+	ok "/mnt/etc/sv/zfs-autosnap"
+
+	cp $PWD/services/zfs-autosnap/zfs-autosnap.sh /mnt/usr/local/bin ||
+		{
+			failhard "Failed to copy zfs-autosnap.sh"
+			exit 1
+		}
+	ok "/mnt/usr/local/bin/zfs-autosnap.sh"
+
+	mkdir -p /mnt/etc/zfs-autosnap
+	cp $PWD/services/zfs-autosnap/jobs.conf /mnt/etc/zfs-autosnap/jobs.conf ||
+		{
+			failhard "Failed to copy zfs-autosnap jobs config"
+			exit 1
+		}
+	ok "/etc/zfs-autosnap/jobs.conf"
+
+	chmod +x /mnt/etc/sv/zfs-autosnap/run /mnt/etc/sv/zfs-autosnap/finish /mnt/etc/sv/zfs-autosnap/log/run /mnt/usr/local/bin/zfs-autosnap.sh ||
+		{
+			failhard "Failed to make zfs-autosnap files executable"
+			exit 1
+		}
+	ok "ensure executable perimssions for zsf-autosnap service-files"
+	ok "Skipped linking efisync-runit service"
 }
 
 # ENTRY:
@@ -1020,5 +1059,6 @@ setup_user
 echo $VOID_HOSTNAME >/mnt/etc/hostname
 sync_esps
 install_efisync
+install_zfs-autosnap
 umount -n -R /mnt
 zpool export zroot
