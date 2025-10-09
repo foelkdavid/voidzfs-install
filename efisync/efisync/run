@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+. ./conf
+exec 2>&1
+exec /usr/local/bin/efisync.sh

@@ -1,0 +1,3 @@
+SRC="/boot/efi"
+DST="/boot/efi2"
+LOCK="/tmp/efisync.lock"
