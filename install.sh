@@ -79,20 +79,21 @@ zfscheck() {
 }
 
 servicecheck() {
-    local files=(
-        "efisync/efisync.sh"
-        "efisync/efisync/run"
-        "efisync/efisync/log/run"
-    )
+	local files=(
+		"efisync/efisync.sh"
+		"efisync/efisync/run"
+		"efisync/efisync/log/run"
+	)
 
-    for f in "${files[@]}"; do
-        [[ -e "$f" ]] || { failhard "Missing required file: $f"; return 1; }
-    done
+	for f in "${files[@]}"; do
+		[[ -e "$f" ]] || {
+			failhard "Missing required file: $f"
+			return 1
+		}
+	done
 
-    return 0
+	return 0
 }
-
-
 
 run_prechecks() {
 	clear
@@ -104,11 +105,9 @@ run_prechecks() {
 	check "System booted in EFI mode" test -d /sys/firmware/efi
 	check "Check hostname" hostnamecheck
 	check "ZFS utilities and module available" zfscheck
-    check "Efisync service available" servicecheck
+	check "Efisync service available" servicecheck
 	check "Connectivity to 1.1.1.1 (ICMP)" ping -c2 -W2 1.1.1.1
 	check "DNS resolution (voidlinux.org)" ping -c2 -W2 voidlinux.org
-
-
 
 	if [ "$FAILED" -ne 0 ]; then
 		echo
@@ -941,7 +940,7 @@ setup_swap() {
 }
 
 install_efisync() {
-    info ["Installing efisync"]
+	info ["Installing efisync-runit-service"]
 
 	tail_window 4 xchroot /mnt xbps-install -S rsync inotify-tools util-linux -y ||
 		{
@@ -949,33 +948,33 @@ install_efisync() {
 			exit 1
 		}
 
-    cp -r $PWD/efisync/efisync /mnt/etc/sv/ ||
+	cp -r $PWD/efisync/efisync /mnt/etc/sv/ ||
 		{
 			failhard "Failed to copy efisync runit service"
 			exit 1
 		}
-    ok "/mnt/etc/sv/efisync"
+	ok "/mnt/etc/sv/efisync"
 
-    cp $PWD/efisync/efisync.sh /mnt/user/local/bin/ ||
+	cp $PWD/efisync/efisync.sh /mnt/usr/local/bin ||
 		{
 			failhard "Failed to copy efisync script"
 			exit 1
 		}
-    ok "/mnt/usr/local/bin/efisync.sh"
+	ok "/mnt/usr/local/bin/efisync.sh"
 
-    chmod +x /mnt/etc/sv/efisync/run /mnt/etc/sv/efisync/conf /mnt/etc/sv/efisync/run/log /mnt/usr/local/bin/efisync.sh ||
+	chmod +x /mnt/etc/sv/efisync/run /mnt/etc/sv/efisync/conf /mnt/etc/sv/efisync/run/log /mnt/usr/local/bin/efisync.sh ||
 		{
 			failhard "Failed to make efisync executable"
 			exit 1
 		}
-    ok "ensure executableperimssions for efisync"
+	ok "ensure executable perimssions for efisync"
 
-    xchroot /mnt ln -s /etc/sv/efisync /var/service/ ||
+	xchroot /mnt ln -s /etc/sv/efisync /var/service/ ||
 		{
-			failhard "Failed to copy efisync script"
+			failhard "Failed to link efisync-runit-service"
 			exit 1
 		}
-    ok "linked efisync-runit service"
+	ok "linked efisync-runit service"
 
 }
 
