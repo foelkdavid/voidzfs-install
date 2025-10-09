@@ -78,6 +78,23 @@ zfscheck() {
 	return 0
 }
 
+servicecheck() {
+	local files=(
+		"efisync/efisync.sh"
+		"efisync/efisync/run"
+		"efisync/efisync/log/run"
+	)
+
+	for f in "${files[@]}"; do
+		[[ -e "$f" ]] || {
+			failhard "Missing required file: $f"
+			return 1
+		}
+	done
+
+	return 0
+}
+
 run_prechecks() {
 	clear
 	echo "──────────────────────"
@@ -88,6 +105,7 @@ run_prechecks() {
 	check "System booted in EFI mode" test -d /sys/firmware/efi
 	check "Check hostname" hostnamecheck
 	check "ZFS utilities and module available" zfscheck
+	check "Efisync service available" servicecheck
 	check "Connectivity to 1.1.1.1 (ICMP)" ping -c2 -W2 1.1.1.1
 	check "DNS resolution (voidlinux.org)" ping -c2 -W2 voidlinux.org
 
@@ -457,8 +475,18 @@ configure_efi_partitions() {
 
 	if [[ "${VOID_MIRROR}" == true ]]; then
 		info "[Creating EFI partitions for both disks]"
-		mkfs.vfat -F32 "$BOOT_DEVICE_1"
-		mkfs.vfat -F32 "$BOOT_DEVICE_2"
+		mkfs.vfat -F32 "$BOOT_DEVICE_1" >/dev/null 2>&1 ||
+			{
+				failhard "Failed to create efipartition on $BOOT_DEVICE_1"
+				exit 1
+			}
+		ok "Created EFI-Partition on $BOOT_DEVICE_1"
+		mkfs.vfat -F32 "$BOOT_DEVICE_2" >/dev/null 2>&1 ||
+			{
+				failhard "Failed to create efipartition on $BOOT_DEVICE_1"
+				exit 1
+			}
+		ok "Created EFI-Partition on $BOOT_DEVICE_2"
 
 		EFI1_UUID="$(blkid -s UUID -o value "$BOOT_DEVICE_1")"
 		echo "UUID=$EFI1_UUID /boot/efi vfat defaults,nofail 0 0" >>/mnt/etc/fstab
@@ -760,7 +788,7 @@ configure_rc_conf() {
 
 # used in "configure_glibc_locales"
 is_glibc() {
-	xchroot /mnt ldd --version 2>&1 | grep -qi 'libc'
+	xchroot /mnt ldd --version 2>&1 | grep 'libc'
 }
 
 configure_glibc_locales() {
@@ -791,7 +819,6 @@ configure_glibc_locales() {
 configure_system() {
 	info "[Configuring new System]"
 	configure_rc_conf
-	info "[Setting Timezone to $VOID_TIMEZONE]"
 	xchroot /mnt ln -sf "/usr/share/zoneinfo/$VOID_TIMEZONE" /etc/localtime >/dev/null 2>&1 ||
 		{
 			failhard "Failed to set timezone"
@@ -910,15 +937,58 @@ sync_esps() {
 
 # TODO: add setup for single disk, dont have time rn
 setup_swap() {
+	info [Setting up Swap] # TOOD only do this if swap != 0 -> this requires other fixes too so no time rn
 	export SWAPPART_DISK_1="$(devpart "$VOID_DISK1" 2)"
 	export SWAPPART_DISK_2="$(devpart "$VOID_DISK2" 2)"
-	sudo mkswap $SWAPPART_DISK_1
-	sudo mkswap $SWAPPART_DISK_2
+	sudo mkswap $SWAPPART_DISK_1 >/dev/null 2>&1
+	ok "Created Swap on Disk1"
+	sudo mkswap $SWAPPART_DISK_2 >/dev/null 2>&1
+	ok "Created Swap on Disk2"
 	SWAP1_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_1")"
 	echo "UUID=$SWAP1_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
-
+	ok "Created swap fstab-entry for Disk1"
 	SWAP2_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_2")"
 	echo "UUID=$SWAP2_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
+	ok "Created swap fstab-entry for Disk2"
+}
+
+install_efisync() {
+	info ["Installing efisync-runit-service"]
+
+	tail_window 4 xchroot /mnt xbps-install -S rsync inotify-tools util-linux -y ||
+		{
+			failhard "Failed to install efibootmgr on the new system"
+			exit 1
+		}
+
+	cp -r $PWD/efisync/efisync /mnt/etc/sv/ ||
+		{
+			failhard "Failed to copy efisync runit service"
+			exit 1
+		}
+	ok "/mnt/etc/sv/efisync"
+
+	cp $PWD/efisync/efisync.sh /mnt/usr/local/bin ||
+		{
+			failhard "Failed to copy efisync script"
+			exit 1
+		}
+	ok "/mnt/usr/local/bin/efisync.sh"
+
+	chmod +x /mnt/etc/sv/efisync/run /mnt/etc/sv/efisync/conf /mnt/etc/sv/efisync/log/run /mnt/usr/local/bin/efisync.sh ||
+		{
+			failhard "Failed to make efisync executable"
+			exit 1
+		}
+	ok "ensure executable perimssions for efisync"
+	#
+	#     xchroot /mnt ln -s /etc/sv/efisync /var/service/ ||
+	# 		{
+	# 			failhard "Failed to link efisync-runit-service"
+	# 			exit 1
+	# 		}
+	ok "Skipped linking efisync-runit service"
+	#
 }
 
 # ENTRY:
@@ -949,5 +1019,6 @@ setup_swap
 setup_user
 echo $VOID_HOSTNAME >/mnt/etc/hostname
 sync_esps
+install_efisync
 umount -n -R /mnt
 zpool export zroot
