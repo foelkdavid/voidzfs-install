@@ -78,6 +78,22 @@ zfscheck() {
 	return 0
 }
 
+servicecheck() {
+    local files=(
+        "efisync/efisync.sh"
+        "efisync/efisync/run"
+        "efisync/efisync/log/run"
+    )
+
+    for f in "${files[@]}"; do
+        [[ -e "$f" ]] || { failhard "Missing required file: $f"; return 1; }
+    done
+
+    return 0
+}
+
+
+
 run_prechecks() {
 	clear
 	echo "──────────────────────"
@@ -88,8 +104,11 @@ run_prechecks() {
 	check "System booted in EFI mode" test -d /sys/firmware/efi
 	check "Check hostname" hostnamecheck
 	check "ZFS utilities and module available" zfscheck
+    check "Efisync service available" servicecheck
 	check "Connectivity to 1.1.1.1 (ICMP)" ping -c2 -W2 1.1.1.1
 	check "DNS resolution (voidlinux.org)" ping -c2 -W2 voidlinux.org
+
+
 
 	if [ "$FAILED" -ne 0 ]; then
 		echo
