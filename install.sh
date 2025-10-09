@@ -475,8 +475,18 @@ configure_efi_partitions() {
 
 	if [[ "${VOID_MIRROR}" == true ]]; then
 		info "[Creating EFI partitions for both disks]"
-		mkfs.vfat -F32 "$BOOT_DEVICE_1"
-		mkfs.vfat -F32 "$BOOT_DEVICE_2"
+		mkfs.vfat -F32 "$BOOT_DEVICE_1" >/dev/null 2>&1 ||
+            {
+                failhard "Failed to create efipartition on $BOOT_DEVICE_1"
+                exit 1
+            }
+        ok "Created EFI-Partition on $BOOT_DEVICE_1"
+		mkfs.vfat -F32 "$BOOT_DEVICE_2" >/dev/null 2>&1 ||
+            {
+                failhard "Failed to create efipartition on $BOOT_DEVICE_1"
+                exit 1
+            }
+        ok "Created EFI-Partition on $BOOT_DEVICE_2"
 
 		EFI1_UUID="$(blkid -s UUID -o value "$BOOT_DEVICE_1")"
 		echo "UUID=$EFI1_UUID /boot/efi vfat defaults,nofail 0 0" >>/mnt/etc/fstab
@@ -778,7 +788,7 @@ configure_rc_conf() {
 
 # used in "configure_glibc_locales"
 is_glibc() {
-	xchroot /mnt ldd --version 2>&1 | grep -qi 'libc'
+	xchroot /mnt ldd --version 2>&1 | grep 'libc'
 }
 
 configure_glibc_locales() {
@@ -809,7 +819,6 @@ configure_glibc_locales() {
 configure_system() {
 	info "[Configuring new System]"
 	configure_rc_conf
-	info "[Setting Timezone to $VOID_TIMEZONE]"
 	xchroot /mnt ln -sf "/usr/share/zoneinfo/$VOID_TIMEZONE" /etc/localtime >/dev/null 2>&1 ||
 		{
 			failhard "Failed to set timezone"
@@ -928,15 +937,19 @@ sync_esps() {
 
 # TODO: add setup for single disk, dont have time rn
 setup_swap() {
+    info [Setting up Swap] # TOOD only do this if swap != 0 -> this requires other fixes too so no time rn
 	export SWAPPART_DISK_1="$(devpart "$VOID_DISK1" 2)"
 	export SWAPPART_DISK_2="$(devpart "$VOID_DISK2" 2)"
-	sudo mkswap $SWAPPART_DISK_1
-	sudo mkswap $SWAPPART_DISK_2
+	sudo mkswap $SWAPPART_DISK_1 >/dev/null 2>&1
+    ok "Created Swap on Disk1"
+	sudo mkswap $SWAPPART_DISK_2 >/dev/null 2>&1
+    ok "Created Swap on Disk2"
 	SWAP1_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_1")"
 	echo "UUID=$SWAP1_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
-
+    ok "Created swap fstab-entry for Disk1"
 	SWAP2_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_2")"
 	echo "UUID=$SWAP2_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
+    ok "Created swap fstab-entry for Disk2"
 }
 
 install_efisync() {
@@ -962,7 +975,7 @@ install_efisync() {
 		}
 	ok "/mnt/usr/local/bin/efisync.sh"
 
-	chmod +x /mnt/etc/sv/efisync/run /mnt/etc/sv/efisync/conf /mnt/etc/sv/efisync/run/log /mnt/usr/local/bin/efisync.sh ||
+	chmod +x /mnt/etc/sv/efisync/run /mnt/etc/sv/efisync/conf /mnt/etc/sv/efisync/log/run /mnt/usr/local/bin/efisync.sh ||
 		{
 			failhard "Failed to make efisync executable"
 			exit 1
