@@ -961,7 +961,7 @@ setup_swap() {
 install_efisync() {
 	info ["Installing efisync-runit-service"]
 
-	tail_window 4 xchroot /mnt xbps-install -S rsync inotify-tools util-linux -y ||
+	tail_window 4 xchroot /mnt xbps-install -S rsync inotify-tools util-linux socklog-void -y ||
 		{
 			failhard "Failed to install efisync-dependencies on the new system"
 			exit 1
@@ -987,7 +987,7 @@ install_efisync() {
 			exit 1
 		}
 	ok "ensure executable perimssions for efisync"
-	ok "Skipped linking efisync-runit service"
+#	ok "Skipped linking efisync-runit service"
 }
 
 install_zfs-autosnap() {
@@ -1062,3 +1062,10 @@ install_efisync
 install_zfs-autosnap
 umount -n -R /mnt
 zpool export zroot
+echo ""
+echo "──────────────────────"
+echo -e "${G}Install finished!${NC}"
+echo "──────────────────────"
+info "Dont forget to enable the following services after rebooting!:"
+ok "efisync"
+ok "zfs-autosnap"
