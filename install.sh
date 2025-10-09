@@ -921,6 +921,45 @@ setup_swap() {
 	echo "UUID=$SWAP2_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
 }
 
+install_efisync() {
+    info ["Installing efisync"]
+
+	tail_window 4 xchroot /mnt xbps-install -S rsync inotify-tools util-linux -y ||
+		{
+			failhard "Failed to install efibootmgr on the new system"
+			exit 1
+		}
+
+    cp -r $PWD/efisync/efisync /mnt/etc/sv/ ||
+		{
+			failhard "Failed to copy efisync runit service"
+			exit 1
+		}
+    ok "/mnt/etc/sv/efisync"
+
+    cp $PWD/efisync/efisync.sh /mnt/user/local/bin/ ||
+		{
+			failhard "Failed to copy efisync script"
+			exit 1
+		}
+    ok "/mnt/usr/local/bin/efisync.sh"
+
+    chmod +x /mnt/etc/sv/efisync/run /mnt/etc/sv/efisync/conf /mnt/etc/sv/efisync/run/log /mnt/usr/local/bin/efisync.sh ||
+		{
+			failhard "Failed to make efisync executable"
+			exit 1
+		}
+    ok "ensure executableperimssions for efisync"
+
+    xchroot /mnt ln -s /etc/sv/efisync /var/service/ ||
+		{
+			failhard "Failed to copy efisync script"
+			exit 1
+		}
+    ok "linked efisync-runit service"
+
+}
+
 # ENTRY:
 while true; do
 	get_inputs
@@ -949,5 +988,6 @@ setup_swap
 setup_user
 echo $VOID_HOSTNAME >/mnt/etc/hostname
 sync_esps
+install_efisync
 umount -n -R /mnt
 zpool export zroot
