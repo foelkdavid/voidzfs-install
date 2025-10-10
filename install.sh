@@ -13,7 +13,6 @@ set -Eeo pipefail
 # Define Colors for prettier printing
 R="\033[0;31m"  # Red
 G="\033[0;32m"  # Green
-B="\033[0;34m"  # Blue
 Y="\033[0;33m"  # Yellow
 P="\033[0;35m"  # Purple
 LG="\033[1;32m" # Light Green
@@ -370,7 +369,7 @@ partition_disks() {
 		ok "Created EFI-Partition on $d"
 
 		# create swap
-		sgdisk -n2:0:+${VOID_SWAPSIZE}GiB -t2:8200 -c2:swap "$d" >/dev/null ||
+		sgdisk -n2:0:+"${VOID_SWAPSIZE}"GiB -t2:8200 -c2:swap "$d" >/dev/null ||
 			{
 				failhard "Swap partition failed on $d"
 				exit 1
@@ -402,13 +401,15 @@ set_zfs_vars() {
 	# Disk 1
 	export BOOT_DISK_1="$VOID_DISK1"
 	export BOOT_PART_1=1
-	export BOOT_DEVICE_1="$(devpart "$VOID_DISK1" 1)"
-	ok "BOOT_DEVICE_1 set to $BOOT_DEVICE_1"
+	BOOT_DEVICE_1="$(devpart "$VOID_DISK1" 1)"
+	export BOOT_DEVICE_1
+    ok "BOOT_DEVICE_1 set to $BOOT_DEVICE_1"
 
 	export POOL_DISK_1="$VOID_DISK1"
 	export POOL_PART_1=3
-	export POOL_DEVICE_1="$(devpart "$VOID_DISK1" 3)"
-	ok "POOL_DEVICE_1 set to $POOL_DEVICE_1"
+	POOL_DEVICE_1="$(devpart "$VOID_DISK1" 3)"
+	export POOL_DEVICE_1
+    ok "POOL_DEVICE_1 set to $POOL_DEVICE_1"
 
 	# Disk 2 (only if set and not "none")
 	#
@@ -416,13 +417,15 @@ set_zfs_vars() {
 		info "[Setting ZFS-Vars for $VOID_DISK2"
 		export BOOT_DISK_2="$VOID_DISK2"
 		export BOOT_PART_2=1
-		export BOOT_DEVICE_2="$(devpart "$VOID_DISK2" 1)"
-		ok "BOOT_DEVICE_2 set to $BOOT_DEVICE_2"
+		BOOT_DEVICE_2="$(devpart "$VOID_DISK2" 1)"
+		export BOOT_DEVICE_2
+        ok "BOOT_DEVICE_2 set to $BOOT_DEVICE_2"
 
 		export POOL_DISK_2="$VOID_DISK2"
 		export POOL_PART_2=3
-		export POOL_DEVICE_2="$(devpart "$VOID_DISK2" 3)"
-		ok "POOL_DEVICE_2 set to $POOL_DEVICE_2"
+		POOL_DEVICE_2="$(devpart "$VOID_DISK2" 3)"
+		export POOL_DEVICE_2
+        ok "POOL_DEVICE_2 set to $POOL_DEVICE_2"
 	fi
 }
 
@@ -610,8 +613,8 @@ create_zpool() {
 			-O keylocation=file:///etc/zfs/zroot.key \
 			-O keyformat=passphrase \
 			zroot mirror \
-			/dev/disk/by-partuuid/$(blkid -s PARTUUID -o value "$POOL_DEVICE_1") \
-			/dev/disk/by-partuuid/$(blkid -s PARTUUID -o value "$POOL_DEVICE_2") ||
+			/dev/disk/by-partuuid/"$(blkid -s PARTUUID -o value "$POOL_DEVICE_1")" \
+			/dev/disk/by-partuuid/"$(blkid -s PARTUUID -o value "$POOL_DEVICE_2")" ||
 			{
 				failhard "ZFS pool creation (mirror) failed"
 				unset ZFS_PASSPHRASE
@@ -620,6 +623,7 @@ create_zpool() {
 
 		ok "Created 'zroot' mirror: $POOL_DEVICE_1 + $POOL_DEVICE_2"
 	else
+        # TODO!
 		info "[Creating encrypted ZFS pool 'zroot' on SINGLE DISK]"
 		failhard "NOT IMPLEMENTED"
 		unset ZFS_PASSPHRASE
@@ -684,7 +688,7 @@ create_zfs_datasets() {
 # taken from
 # https://docs.zfsbootmenu.org/en/v3.0.x/guides/void-linux/uefi.html
 setup_zfs() {
-	echo $ZFS_PASSPHRASE >/etc/zfs/zroot.key
+	echo "$ZFS_PASSPHRASE" >/etc/zfs/zroot.key
 	chmod 000 /etc/zfs/zroot.key
 	source /etc/os-release
 	export ID
@@ -695,7 +699,7 @@ setup_zfs() {
 	zpool export zroot
 	zpool import -N -R /mnt zroot
 	zfs load-key -L file:///etc/zfs/zroot.key zroot
-	zfs mount zroot/ROOT/${ID}
+	zfs mount zroot/ROOT/"${ID}"
 	zfs mount zroot/home
 	udevadm trigger
 }
@@ -754,12 +758,12 @@ install_base_system() {
 	info "[Get architecture]"
 	get_architecture
 	info "[Copying xbps-mirror-keys]"
-	mkdir -p /mnt/var/db/xbps/keys &&
-		cp -r /var/db/xbps/keys /mnt/var/db/xbps ||
-		{
-			failhard "Failed to copy xbps-mirror-keys"
-			exit 1
-		}
+	mkdir -p /mnt/var/db/xbps/keys
+    cp -r /var/db/xbps/keys /mnt/var/db/xbps ||
+    {
+    	failhard "Failed to copy xbps-mirror-keys"
+    	exit 1
+    }
 	ok "Copied xbps-keys into base-system"
 
 	info "[Installing base-system]"
@@ -944,11 +948,13 @@ sync_esps() {
 # TODO: add setup for single disk, dont have time rn
 setup_swap() {
 	info [Setting up Swap] # TOOD only do this if swap != 0 -> this requires other fixes too so no time rn
-	export SWAPPART_DISK_1="$(devpart "$VOID_DISK1" 2)"
-	export SWAPPART_DISK_2="$(devpart "$VOID_DISK2" 2)"
-	sudo mkswap $SWAPPART_DISK_1 >/dev/null 2>&1
+	SWAPPART_DISK_1="$(devpart "$VOID_DISK1" 2)"
+	export SWAPPART_DISK_1
+    SWAPPART_DISK_2="$(devpart "$VOID_DISK2" 2)"
+    export SWAPPART_DISK_2
+	sudo mkswap "$SWAPPART_DISK_1" >/dev/null 2>&1
 	ok "Created Swap on Disk1"
-	sudo mkswap $SWAPPART_DISK_2 >/dev/null 2>&1
+	sudo mkswap "$SWAPPART_DISK_2" >/dev/null 2>&1
 	ok "Created Swap on Disk2"
 	SWAP1_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_1")"
 	echo "UUID=$SWAP1_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
@@ -967,14 +973,14 @@ install_efisync() {
 			exit 1
 		}
 
-	cp -r $PWD/services/efisync/efisync /mnt/etc/sv/ ||
+	cp -r "$PWD"/services/efisync/efisync /mnt/etc/sv/ ||
 		{
 			failhard "Failed to copy efisync runit service"
 			exit 1
 		}
 	ok "/mnt/etc/sv/efisync"
 
-	cp $PWD/services/efisync/efisync.sh /mnt/usr/local/bin ||
+	cp "$PWD"/services/efisync/efisync.sh /mnt/usr/local/bin ||
 		{
 			failhard "Failed to copy efisync script"
 			exit 1
@@ -999,14 +1005,14 @@ install_zfs-autosnap() {
 			exit 1
 		}
 
-	cp -r $PWD/services/zfs-autosnap/zfs-autosnap /mnt/etc/sv/ ||
+	cp -r "$PWD"/services/zfs-autosnap/zfs-autosnap /mnt/etc/sv/ ||
 		{
 			failhard "Failed to copy zfs-autosnap runit service"
 			exit 1
 		}
 	ok "/mnt/etc/sv/zfs-autosnap"
 
-	cp $PWD/services/zfs-autosnap/zfs-autosnap.sh /mnt/usr/local/bin ||
+	cp "$PWD"/services/zfs-autosnap/zfs-autosnap.sh /mnt/usr/local/bin ||
 		{
 			failhard "Failed to copy zfs-autosnap.sh"
 			exit 1
@@ -1014,7 +1020,7 @@ install_zfs-autosnap() {
 	ok "/mnt/usr/local/bin/zfs-autosnap.sh"
 
 	mkdir -p /mnt/etc/zfs-autosnap
-	cp $PWD/services/zfs-autosnap/jobs.conf /mnt/etc/zfs-autosnap/jobs.conf ||
+	cp "$PWD"/services/zfs-autosnap/jobs.conf /mnt/etc/zfs-autosnap/jobs.conf ||
 		{
 			failhard "Failed to copy zfs-autosnap jobs config"
 			exit 1
@@ -1056,7 +1062,7 @@ configure_system
 setup_zfsbootmenu
 setup_swap
 setup_user
-echo $VOID_HOSTNAME >/mnt/etc/hostname
+echo "$VOID_HOSTNAME" >/mnt/etc/hostname
 sync_esps
 install_efisync
 install_zfs-autosnap
