@@ -79,10 +79,6 @@ zfscheck() {
 
 servicecheck() {
 	local files=(
-		"services/efisync/efisync.sh"
-		"services/efisync/efisync/run"
-		"services/efisync/efisync/log/run"
-
 		"services/zfs-autosnap/zfs-autosnap.sh"
 		"services/zfs-autosnap/jobs.conf"
 		"services/zfs-autosnap/zfs-autosnap/run"
@@ -110,7 +106,7 @@ run_prechecks() {
 	check "System booted in EFI mode" test -d /sys/firmware/efi
 	check "Check hostname" hostnamecheck
 	check "ZFS utilities and module available" zfscheck
-	check "Efisync service available" servicecheck
+	check "Service files available" servicecheck
 	check "Connectivity to 1.1.1.1 (ICMP)" ping -c2 -W2 1.1.1.1
 	check "DNS resolution (voidlinux.org)" ping -c2 -W2 voidlinux.org
 
@@ -524,19 +520,21 @@ configure_efi_partitions() {
 			exit 1
 		}
 
-	info "[Mounting EFI2]"
-	mkdir -p /mnt/boot/efi2 >/dev/null 2>&1
-	xchroot /mnt mount /boot/efi2 ||
-		{
-			failhard "Failed to mount EFI2"
-			exit 1
-		}
-
-	# TODO, ADD LOGIC FOR SINGLE DISK USAGE AND UNIQUE LABELS
+	if [[ "${VOID_MIRROR:-false}" == true && -n "${BOOT_DEVICE_2:-}" && "$BOOT_DEVICE_2" != "none" ]]; then
+		info "[Mounting EFI2]"
+		mkdir -p /mnt/boot/efi2 >/dev/null 2>&1
+		xchroot /mnt mount /boot/efi2 ||
+			{
+				failhard "Failed to mount EFI2"
+				exit 1
+			}
+	fi
 
 	xchroot /mnt mount -t efivarfs none /sys/firmware/efi/efivars
 	info "[Adding EFI boot entries]"
-	for CUR_DISK in $VOID_DISK1 $VOID_DISK2; do
+	local disks=("$VOID_DISK1")
+	[[ "${VOID_MIRROR:-false}" == true && -n "${VOID_DISK2:-}" && "$VOID_DISK2" != "none" ]] && disks+=("$VOID_DISK2")
+	for CUR_DISK in "${disks[@]}"; do
 
 		xchroot /mnt efibootmgr -c -d "$CUR_DISK" -p 1 \
 			-L "ZFSBootMenu ($CUR_DISK)" \
@@ -947,24 +945,33 @@ sync_esps() {
 
 # TODO: add setup for single disk, dont have time rn
 setup_swap() {
-	info [Setting up Swap] # TOOD only do this if swap != 0 -> this requires other fixes too so no time rn
+	info "[Setting up Swap]"
+	[[ -z "${VOID_SWAPSIZE:-}" || "${VOID_SWAPSIZE}" -le 0 ]] && { note "Swap disabled"; return 0; }
+
 	SWAPPART_DISK_1="$(devpart "$VOID_DISK1" 2)"
 	export SWAPPART_DISK_1
-    SWAPPART_DISK_2="$(devpart "$VOID_DISK2" 2)"
-    export SWAPPART_DISK_2
+
 	sudo mkswap "$SWAPPART_DISK_1" >/dev/null 2>&1
 	ok "Created Swap on Disk1"
-	sudo mkswap "$SWAPPART_DISK_2" >/dev/null 2>&1
-	ok "Created Swap on Disk2"
+
 	SWAP1_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_1")"
 	echo "UUID=$SWAP1_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
 	ok "Created swap fstab-entry for Disk1"
-	SWAP2_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_2")"
-	echo "UUID=$SWAP2_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
-	ok "Created swap fstab-entry for Disk2"
+
+	if [[ "${VOID_MIRROR:-false}" == true && -n "${VOID_DISK2:-}" && "$VOID_DISK2" != "none" ]]; then
+		SWAPPART_DISK_2="$(devpart "$VOID_DISK2" 2)"
+		export SWAPPART_DISK_2
+		sudo mkswap "$SWAPPART_DISK_2" >/dev/null 2>&1
+		ok "Created Swap on Disk2"
+		SWAP2_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_2")"
+		echo "UUID=$SWAP2_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
+		ok "Created swap fstab-entry for Disk2"
+	fi
 }
 
 install_efisync() {
+	[[ "${VOID_MIRROR:-false}" == true ]] || { note "Skipping efisync (single-disk mode)"; return 0; }
+
 	info ["Installing efisync-runit-service"]
 
 	tail_window 4 xchroot /mnt xbps-install -S rsync inotify-tools util-linux socklog-void -y ||
@@ -1073,5 +1080,5 @@ echo "──────────────────────"
 echo -e "${G}Install finished!${NC}"
 echo "──────────────────────"
 info "Dont forget to enable the following services after rebooting!:"
-ok "efisync"
+[[ "${VOID_MIRROR:-false}" == true ]] && ok "efisync"
 ok "zfs-autosnap"
