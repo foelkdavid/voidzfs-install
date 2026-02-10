@@ -524,30 +524,43 @@ configure_efi_partitions() {
 			exit 1
 		}
 
-	info "[Mounting EFI2]"
-	mkdir -p /mnt/boot/efi2 >/dev/null 2>&1
-	xchroot /mnt mount /boot/efi2 ||
-		{
-			failhard "Failed to mount EFI2"
-			exit 1
-		}
 
-	# TODO, ADD LOGIC FOR SINGLE DISK USAGE AND UNIQUE LABELS
+	if [[ "${VOID_MIRROR}" == true ]]; then
+        info "[Mounting EFI2]"
+        mkdir -p /mnt/boot/efi2 >/dev/null 2>&1
+        xchroot /mnt mount /boot/efi2 ||
+        	{
+        		failhard "Failed to mount EFI2"
+        		exit 1
+        	}
+    fi
 
-	xchroot /mnt mount -t efivarfs none /sys/firmware/efi/efivars
-	info "[Adding EFI boot entries]"
-	for CUR_DISK in $VOID_DISK1 $VOID_DISK2; do
-
-		xchroot /mnt efibootmgr -c -d "$CUR_DISK" -p 1 \
-			-L "ZFSBootMenu ($CUR_DISK)" \
-			-l '\EFI\zbm\vmlinuz.EFI' ||
-			{
-				failhard "Failed adding boot entry for $CUR_DISK"
-				exit 1
-			}
-
-		ok "Successfully added boot entries for $CUR_DISK"
-	done
+    xchroot /mnt mount -t efivarfs none /sys/firmware/efi/efivars
+    info "[Adding EFI boot entries]"
+    
+    if [[ "${VOID_MIRROR}" == true ]]; then
+    	for CUR_DISK in "$VOID_DISK1" "$VOID_DISK2"; do
+    		xchroot /mnt efibootmgr -c -d "$CUR_DISK" -p 1 \
+    			-L "ZFSBootMenu ($CUR_DISK)" \
+    			-l '\EFI\zbm\vmlinuz.EFI' ||
+    			{
+    				failhard "Failed adding boot entry for $CUR_DISK"
+    				exit 1
+    			}
+    
+    		ok "Successfully added boot entry for $CUR_DISK"
+    	done
+    else
+    	xchroot /mnt efibootmgr -c -d "$VOID_DISK1" -p 1 \
+    		-L "ZFSBootMenu ($VOID_DISK1)" \
+    		-l '\EFI\zbm\vmlinuz.EFI' ||
+    		{
+    			failhard "Failed adding boot entry for $VOID_DISK1"
+    			exit 1
+    		}
+    
+    	ok "Successfully added boot entry for $VOID_DISK1"
+    fi
 
 }
 
@@ -589,7 +602,6 @@ set_user_password() {
 }
 
 # TODO: - optimize parameters here
-# TODO: - Test on single disk (lowprio rn)
 create_zpool() {
 	[[ -z "${POOL_DEVICE_1:-}" ]] && {
 		failhard "POOL_DEVICE_1 not set"
@@ -598,8 +610,6 @@ create_zpool() {
 
 	if [[ "${VOID_MIRROR:-false}" == true && -n "${POOL_DEVICE_2:-}" && "$POOL_DEVICE_2" != "none" ]]; then
 		info "[Creating encrypted ZFS pool 'zroot' as MIRROR]"
-
-		#    printf '%s\n%s\n' "$ZFS_PASSPHRASE" "$ZFS_PASSPHRASE" | zpool create -f \
 		zpool create -f \
 			-o ashift=12 \
 			-O compression=zstd \
@@ -623,30 +633,26 @@ create_zpool() {
 
 		ok "Created 'zroot' mirror: $POOL_DEVICE_1 + $POOL_DEVICE_2"
 	else
-        # TODO!
 		info "[Creating encrypted ZFS pool 'zroot' on SINGLE DISK]"
-		failhard "NOT IMPLEMENTED"
-		unset ZFS_PASSPHRASE
-		exit 1
-
-		printf '%s\n%s\n' "$ZFS_PASSPHRASE" "$ZFS_PASSPHRASE" | zpool create -f \
-			-o ashift=12 \
-			-O compression=zstd \
-			-O acltype=posixacl \
-			-O xattr=sa \
-			-O relatime=on \
-			-O dnodesize=auto \
-			-O normalization=formD \
-			-O mountpoint=none \
-			-O encryption=aes-256-gcm \
-			-O keyformat=passphrase \
-			-O keylocation=prompt \
-			zroot "$POOL_DEVICE_1" >/dev/null 2>&1 ||
-			{
-				failhard "ZFS pool creation (single) failed"
-				unset ZFS_PASSPHRASE
-				exit 1
-			}
+        zpool create -f \
+        	-o ashift=12 \
+        	-O compression=zstd \
+        	-O acltype=posixacl \
+        	-O xattr=sa \
+        	-O relatime=on \
+        	-O dnodesize=auto \
+        	-O normalization=formD \
+        	-O mountpoint=none \
+        	-O encryption=aes-256-gcm \
+        	-O keylocation=file:///etc/zfs/zroot.key \
+        	-O keyformat=passphrase \
+        	zroot \
+        	/dev/disk/by-partuuid/"$(blkid -s PARTUUID -o value "$POOL_DEVICE_1")" ||
+        {
+        	failhard "ZFS pool creation (single disk) failed"
+        	unset ZFS_PASSPHRASE
+        	exit 1
+        }
 
 		ok "Created 'zroot' on $POOL_DEVICE_1"
 	fi
@@ -945,23 +951,35 @@ sync_esps() {
 	ok "Synced secondary ESP"
 }
 
-# TODO: add setup for single disk, dont have time rn
 setup_swap() {
-	info [Setting up Swap] # TOOD only do this if swap != 0 -> this requires other fixes too so no time rn
-	SWAPPART_DISK_1="$(devpart "$VOID_DISK1" 2)"
-	export SWAPPART_DISK_1
-    SWAPPART_DISK_2="$(devpart "$VOID_DISK2" 2)"
-    export SWAPPART_DISK_2
-	sudo mkswap "$SWAPPART_DISK_1" >/dev/null 2>&1
-	ok "Created Swap on Disk1"
-	sudo mkswap "$SWAPPART_DISK_2" >/dev/null 2>&1
-	ok "Created Swap on Disk2"
-	SWAP1_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_1")"
-	echo "UUID=$SWAP1_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
-	ok "Created swap fstab-entry for Disk1"
-	SWAP2_UUID="$(blkid -s UUID -o value "$SWAPPART_DISK_2")"
-	echo "UUID=$SWAP2_UUID none swap defaults,nofail 0 0" >>/mnt/etc/fstab
-	ok "Created swap fstab-entry for Disk2"
+	info "[Setting up Swap]"
+
+	DISKS=("$VOID_DISK1")
+	if [[ "${VOID_MIRROR}" == true ]]; then
+		DISKS+=("$VOID_DISK2")
+	fi
+
+	i=1
+	for DISK in "${DISKS[@]}"; do
+		SWAPPART="$(devpart "$DISK" 2)"
+
+		if (( i == 1 )); then
+			SWAPPART_DISK_1="$SWAPPART"
+			export SWAPPART_DISK_1
+		else
+			SWAPPART_DISK_2="$SWAPPART"
+			export SWAPPART_DISK_2
+		fi
+
+		sudo mkswap "$SWAPPART" >/dev/null 2>&1
+		ok "Created Swap on Disk$i"
+
+		SWAP_UUID="$(blkid -s UUID -o value "$SWAPPART")"
+		echo "UUID=$SWAP_UUID none swap defaults,nofail 0 0" >> /mnt/etc/fstab
+		ok "Created swap fstab-entry for Disk$i"
+
+		((i++))
+	done
 }
 
 install_efisync() {
@@ -1063,8 +1081,10 @@ setup_zfsbootmenu
 setup_swap
 setup_user
 echo "$VOID_HOSTNAME" >/mnt/etc/hostname
-sync_esps
-install_efisync
+if [[ "${VOID_MIRROR}" == true ]]; then
+	sync_esps
+	install_efisync
+fi
 install_zfs-autosnap
 umount -n -R /mnt
 zpool export zroot
@@ -1073,5 +1093,7 @@ echo "──────────────────────"
 echo -e "${G}Install finished!${NC}"
 echo "──────────────────────"
 info "Dont forget to enable the following services after rebooting!:"
-ok "efisync"
+if [[ "${VOID_MIRROR}" == true ]]; then
+    ok "efisync"
+fi
 ok "zfs-autosnap"
