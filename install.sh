@@ -8,6 +8,13 @@ VOID_CHECK_HOSTNAME=true
 VOID_REPO_MIRROR=https://repo-de.voidlinux.org/current
 VOID_HWCLOCK=UTC
 
+# Detect boot mode early (used throughout the script)
+if test -d /sys/firmware/efi; then
+	VOID_BOOT_MODE=uefi
+else
+	VOID_BOOT_MODE=bios
+fi
+
 set -Eeo pipefail
 
 # Define Colors for prettier printing
@@ -79,16 +86,20 @@ zfscheck() {
 
 servicecheck() {
 	local files=(
-		"services/efisync/efisync.sh"
-		"services/efisync/efisync/run"
-		"services/efisync/efisync/log/run"
-
 		"services/zfs-autosnap/zfs-autosnap.sh"
 		"services/zfs-autosnap/jobs.conf"
 		"services/zfs-autosnap/zfs-autosnap/run"
 		"services/zfs-autosnap/zfs-autosnap/finish"
 		"services/zfs-autosnap/zfs-autosnap/log/run"
 	)
+
+	if [[ "$VOID_BOOT_MODE" == "uefi" ]]; then
+		files+=(
+			"services/efisync/efisync.sh"
+			"services/efisync/efisync/run"
+			"services/efisync/efisync/log/run"
+		)
+	fi
 
 	for f in "${files[@]}"; do
 		[[ -e "$f" ]] || {
@@ -107,10 +118,14 @@ run_prechecks() {
 	echo "──────────────────────"
 	FAILED=0
 	info "[Running Pre-Checks]"
-	check "System booted in EFI mode" test -d /sys/firmware/efi
+	if [[ "$VOID_BOOT_MODE" == "uefi" ]]; then
+		ok "Boot mode detected: UEFI"
+	else
+		ok "Boot mode detected: BIOS (legacy)"
+	fi
 	check "Check hostname" hostnamecheck
 	check "ZFS utilities and module available" zfscheck
-	check "Efisync service available" servicecheck
+	check "Service files available" servicecheck
 	check "Connectivity to 1.1.1.1 (ICMP)" ping -c2 -W2 1.1.1.1
 	check "DNS resolution (voidlinux.org)" ping -c2 -W2 voidlinux.org
 
@@ -129,6 +144,7 @@ print_preconf_header() {
 	echo -e "${Y}[Configuration]${NC}"
 	echo -e "  Xbps-Mirror  -> [ ${Y}${VOID_REPO_MIRROR}${NC} ]"
 	echo -e "  HW-CLOCK     -> [ ${Y}${VOID_HWCLOCK}${NC} ]"
+	echo -e "  Boot Mode    -> [ ${Y}${VOID_BOOT_MODE}${NC} ]"
 	echo -e "  ZFS-Mirror?  -> [ ${Y}${VOID_MIRROR:-}${NC} ]"
 	echo -e "  Disk1        -> [ ${Y}${VOID_DISK1:-}${NC} ] ${VOID_DISK1_SIZE}"
 	echo -e "  Disk2        -> [ ${Y}${VOID_DISK2:-}${NC} ] ${VOID_DISK2_SIZE}"
@@ -342,9 +358,8 @@ get_inputs() {
 }
 
 # Formats the following way:
-# 512 -> EFI
-# $VOID_SWAPSIZE -> swap
-# REST OF DISK -> zfs
+# UEFI: 512MiB EFI (ef00) | $VOID_SWAPSIZE swap | REST zfs
+# BIOS: 2MiB BIOS boot (ef02) | $VOID_SWAPSIZE swap | REST zfs
 partition_disks() {
 
 	# Collect disks
@@ -360,13 +375,23 @@ partition_disks() {
 			exit 1
 		}
 
-		# create EFI
-		sgdisk -n1:1MiB:+512MiB -t1:ef00 -c1:EFI "$d" >/dev/null ||
-			{
-				failhard "EFI partition failed on $d"
-				exit 1
-			}
-		ok "Created EFI-Partition on $d"
+		if [[ "$VOID_BOOT_MODE" == "uefi" ]]; then
+			# create EFI
+			sgdisk -n1:1MiB:+512MiB -t1:ef00 -c1:EFI "$d" >/dev/null ||
+				{
+					failhard "EFI partition failed on $d"
+					exit 1
+				}
+			ok "Created EFI-Partition on $d"
+		else
+			# create BIOS boot partition (needed by GRUB on GPT disks)
+			sgdisk -n1:1MiB:+2MiB -t1:ef02 -c1:BIOS "$d" >/dev/null ||
+				{
+					failhard "BIOS boot partition failed on $d"
+					exit 1
+				}
+			ok "Created BIOS-boot-Partition on $d"
+		fi
 
 		# create swap
 		sgdisk -n2:0:+"${VOID_SWAPSIZE}"GiB -t2:8200 -c2:swap "$d" >/dev/null ||
@@ -562,6 +587,30 @@ configure_efi_partitions() {
     	ok "Successfully added boot entry for $VOID_DISK1"
     fi
 
+}
+
+configure_bios_boot() {
+	info "[Installing grub inside new System]"
+	tail_window 4 xchroot /mnt xbps-install -S grub -y ||
+		{
+			failhard "Failed to install grub on the new system"
+			exit 1
+		}
+	echo -ne "\033[4A\033[0J"
+	ok "Installed grub on the new system"
+
+	local disks=("$VOID_DISK1")
+	[[ "${VOID_MIRROR:-false}" == true && -n "${VOID_DISK2:-}" && "$VOID_DISK2" != "none" ]] && disks+=("$VOID_DISK2")
+
+	for disk in "${disks[@]}"; do
+		info "[Installing GRUB to MBR of $disk]"
+		xchroot /mnt grub-install "$disk" ||
+			{
+				failhard "grub-install failed on $disk"
+				exit 1
+			}
+		ok "Installed GRUB to $disk"
+	done
 }
 
 get_zfs_passphrase() {
@@ -860,56 +909,117 @@ configure_system() {
 }
 
 setup_zfsbootmenu() {
-	info "[Installing zfsbootmenu + boot packages inside chroot]"
-	tail_window 4 xchroot /mnt xbps-install -S zfsbootmenu systemd-boot-efistub mdadm rsync -y ||
+	if [[ "$VOID_BOOT_MODE" == "uefi" ]]; then
+		info "[Installing zfsbootmenu + boot packages inside chroot]"
+		tail_window 4 xchroot /mnt xbps-install -S zfsbootmenu systemd-boot-efistub mdadm rsync -y ||
+			{
+				failhard "Failed to install zfsbootmenu on the new system"
+				exit 1
+			}
+		echo -ne "\033[4A\033[0J"
+		ok "Installed zfsbootmenu on the new system"
+
+		# default config but modified to match the guide at:
+		# https://docs.zfsbootmenu.org/en/v3.0.x/guides/void-linux/uefi.html
 		{
-			failhard "Failed to install zfsbootmenu on the new system"
-			exit 1
-		}
-	echo -ne "\033[4A\033[0J"
-	ok "Installed zfsbootmenu on the new system"
+			echo "Global:"
+			echo "  ManageImages: true"
+			echo "  BootMountPoint: /boot/efi"
+			echo "  DracutConfDir: /etc/zfsbootmenu/dracut.conf.d"
+			echo "  PreHooksDir: /etc/zfsbootmenu/generate-zbm.pre.d"
+			echo "  PostHooksDir: /etc/zfsbootmenu/generate-zbm.post.d"
+			echo "  InitCPIOConfig: /etc/zfsbootmenu/mkinitcpio.conf"
+			echo "  KeyCache: true"
+			echo "Components:"
+			echo "  ImageDir: /boot/efi/EFI/zbm"
+			echo "  Versions: 3"
+			echo "  Enabled: false"
+			echo "EFI:"
+			echo "  ImageDir: /boot/efi/EFI/zbm"
+			echo "  Version: false"
+			echo "  Enabled: true"
+			echo "  SplashImage: /etc/zfsbootmenu/splash.bmp"
+			echo "Kernel:"
+			echo "  CommandLine: quiet loglevel=0"
+		} >/mnt/etc/zfsbootmenu/config.yaml ||
+			{
+				failhard "Failed to write to /mnt/zfsbootmenu/config.yaml"
+				exit 1
+			}
+		ok "Wrote config to /mnt/zfsbootmenu/config.yaml"
 
-	# default config but modified to match the guide at:
-	# https://docs.zfsbootmenu.org/en/v3.0.x/guides/void-linux/uefi.html
-	{
-		echo "Global:"
-		echo "  ManageImages: true"
-		echo "  BootMountPoint: /boot/efi"
-		echo "  DracutConfDir: /etc/zfsbootmenu/dracut.conf.d"
-		echo "  PreHooksDir: /etc/zfsbootmenu/generate-zbm.pre.d"
-		echo "  PostHooksDir: /etc/zfsbootmenu/generate-zbm.post.d"
-		echo "  InitCPIOConfig: /etc/zfsbootmenu/mkinitcpio.conf"
-		echo "  KeyCache: true"
-		echo "Components:"
-		echo "  ImageDir: /boot/efi/EFI/zbm"
-		echo "  Versions: 3"
-		echo "  Enabled: false"
-		echo "EFI:"
-		echo "  ImageDir: /boot/efi/EFI/zbm"
-		echo "  Version: false"
-		echo "  Enabled: true"
-		echo "  SplashImage: /etc/zfsbootmenu/splash.bmp"
-		echo "Kernel:"
-		echo "  CommandLine: quiet loglevel=0"
-	} >/mnt/etc/zfsbootmenu/config.yaml ||
+		xchroot /mnt generate-zbm >/dev/null 2>&1 ||
+			{
+				failhard "Failed to generate-zbm"
+				exit 1
+			}
+		ok "Generated ZBM"
+
+		# put a UEFI fallback on disk1 (source ESP)
+		mkdir -p /mnt/boot/efi/EFI/BOOT
+		cp -f /mnt/boot/efi/EFI/zbm/vmlinuz.EFI /mnt/boot/efi/EFI/BOOT/BOOTX64.EFI
+
+	else
+		info "[Installing zfsbootmenu + boot packages inside chroot (BIOS mode)]"
+		tail_window 4 xchroot /mnt xbps-install -S zfsbootmenu mdadm rsync -y ||
+			{
+				failhard "Failed to install zfsbootmenu on the new system"
+				exit 1
+			}
+		echo -ne "\033[4A\033[0J"
+		ok "Installed zfsbootmenu on the new system"
+
+		# BIOS config: use Components (kernel+initramfs) output, no EFI stub
 		{
-			failhard "Failed to write to /mnt/zfsbootmenu/config.yaml"
-			exit 1
-		}
-	ok "Wrote config to /mnt/zfsbootmenu/config.yaml"
+			echo "Global:"
+			echo "  ManageImages: true"
+			echo "  BootMountPoint: /boot"
+			echo "  DracutConfDir: /etc/zfsbootmenu/dracut.conf.d"
+			echo "  PreHooksDir: /etc/zfsbootmenu/generate-zbm.pre.d"
+			echo "  PostHooksDir: /etc/zfsbootmenu/generate-zbm.post.d"
+			echo "  InitCPIOConfig: /etc/zfsbootmenu/mkinitcpio.conf"
+			echo "  KeyCache: true"
+			echo "Components:"
+			echo "  ImageDir: /boot/zfsbootmenu"
+			echo "  Versions: 3"
+			echo "  Enabled: true"
+			echo "EFI:"
+			echo "  Enabled: false"
+			echo "Kernel:"
+			echo "  CommandLine: quiet loglevel=0"
+		} >/mnt/etc/zfsbootmenu/config.yaml ||
+			{
+				failhard "Failed to write to /mnt/zfsbootmenu/config.yaml"
+				exit 1
+			}
+		ok "Wrote BIOS config to /mnt/zfsbootmenu/config.yaml"
 
-	xchroot /mnt generate-zbm >/dev/null 2>&1 ||
+		mkdir -p /mnt/boot/zfsbootmenu
+		xchroot /mnt generate-zbm >/dev/null 2>&1 ||
+			{
+				failhard "Failed to generate-zbm"
+				exit 1
+			}
+		ok "Generated ZBM"
+
+		# Write grub.cfg to chainload the ZBM kernel+initramfs
+		mkdir -p /mnt/boot/grub
 		{
-			failhard "Failed to generate-zbm"
-			exit 1
-		}
-	ok "Generated ZBM"
-
-	# after: ok "Generated ZBM"
-
-	# put a UEFI fallback on disk1 (source ESP)
-	mkdir -p /mnt/boot/efi/EFI/BOOT
-	cp -f /mnt/boot/efi/EFI/zbm/vmlinuz.EFI /mnt/boot/efi/EFI/BOOT/BOOTX64.EFI
+			echo "set timeout=10"
+			echo "set default=0"
+			echo ""
+			echo "menuentry \"ZFSBootMenu\" {"
+			echo "    search.file /zfsbootmenu/vmlinuz-bootmenu root"
+			echo "    linux /zfsbootmenu/vmlinuz-bootmenu"
+			echo "    initrd /zfsbootmenu/initramfs-bootmenu.img"
+			echo "}"
+		} >/mnt/boot/grub/grub.cfg ||
+			{
+				failhard "Failed to write /mnt/boot/grub/grub.cfg"
+				exit 1
+			}
+		ok "Wrote /mnt/boot/grub/grub.cfg"
+	fi
 
 }
 
@@ -1075,13 +1185,17 @@ wipe_disks
 partition_disks
 setup_zfs
 install_base_system
-configure_efi_partitions
+if [[ "$VOID_BOOT_MODE" == "uefi" ]]; then
+	configure_efi_partitions
+else
+	configure_bios_boot
+fi
 configure_system
 setup_zfsbootmenu
 setup_swap
 setup_user
 echo "$VOID_HOSTNAME" >/mnt/etc/hostname
-if [[ "${VOID_MIRROR}" == true ]]; then
+if [[ "$VOID_BOOT_MODE" == "uefi" && "${VOID_MIRROR}" == true ]]; then
 	sync_esps
 	install_efisync
 fi
@@ -1093,7 +1207,7 @@ echo "──────────────────────"
 echo -e "${G}Install finished!${NC}"
 echo "──────────────────────"
 info "Dont forget to enable the following services after rebooting!:"
-if [[ "${VOID_MIRROR}" == true ]]; then
-    ok "efisync"
+if [[ "$VOID_BOOT_MODE" == "uefi" && "${VOID_MIRROR}" == true ]]; then
+	ok "efisync"
 fi
 ok "zfs-autosnap"

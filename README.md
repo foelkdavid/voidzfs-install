@@ -12,15 +12,14 @@ Warning! Single-Disk Setup is currently broken!
 ## Features:
 - Boots from ZFSBootMenu
 - Encryptes FS
+- Supports both UEFI and BIOS (legacy) boot
 - Optional ZFS-Mirror Setup
-    - Two EFI-Partitions for true redundancy
+    - Two EFI-Partitions for true redundancy (UEFI mode)
         - synced once after installation, then synced continuously by custom service
     - ZFS-Mirrored System Partitions
 - Customizable Swap-Partition (no swap is currently not supported -> TODO)
 - Creates additional dataset for /home
-- Provides runit services for automatic Snapshotting + continuous EFI-Syncing
-
-**This requires UEFI to boot.**
+- Provides runit services for automatic Snapshotting + continuous EFI-Syncing (UEFI mode)
 
 # Rough FS diagram:
 <img width="40%" height="40%" alt="ZFS-Layout" src="https://github.com/user-attachments/assets/55bc44b7-1cc6-4ae2-bff5-a7836250e65a" />
