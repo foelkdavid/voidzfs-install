@@ -3,10 +3,10 @@
 # prevents nuking the wrong system in most cases
 # (allowed hostnames are hrmpf and voidlinux)
 # set this to false at your own risk ;)
-VOID_CHECK_HOSTNAME=true
+: "${VOID_CHECK_HOSTNAME:=true}"
 
-VOID_REPO_MIRROR=https://repo-de.voidlinux.org/current
-VOID_HWCLOCK=UTC
+: "${VOID_REPO_MIRROR:=https://repo-de.voidlinux.org/current}"
+: "${VOID_HWCLOCK:=UTC}"
 
 set -Eeo pipefail
 
@@ -338,6 +338,72 @@ get_inputs() {
 	get_timezone
 	print_preconf_header
 	get_keymap
+	print_preconf_header
+}
+
+configure_non_interactive_inputs() {
+	run_prechecks
+
+	: "${VOID_MIRROR:?VOID_MIRROR is required in --non-interactive mode}"
+	: "${VOID_DISK1:?VOID_DISK1 is required in --non-interactive mode}"
+	: "${VOID_SWAPSIZE:?VOID_SWAPSIZE is required in --non-interactive mode}"
+	: "${VOID_HOSTNAME:?VOID_HOSTNAME is required in --non-interactive mode}"
+	: "${VOID_SUDOUSER:?VOID_SUDOUSER is required in --non-interactive mode}"
+	: "${VOID_TIMEZONE:?VOID_TIMEZONE is required in --non-interactive mode}"
+	: "${VOID_KEYMAP:?VOID_KEYMAP is required in --non-interactive mode}"
+	: "${VOID_USER_PASSWORD:?VOID_USER_PASSWORD is required in --non-interactive mode}"
+	: "${VOID_ZFS_PASSPHRASE:?VOID_ZFS_PASSPHRASE is required in --non-interactive mode}"
+
+	case "${VOID_MIRROR}" in
+	true | false) ;;
+	*)
+		failhard "VOID_MIRROR must be 'true' or 'false'"
+		exit 1
+		;;
+	esac
+
+	if [[ "${VOID_MIRROR}" == true ]]; then
+		: "${VOID_DISK2:?VOID_DISK2 is required when VOID_MIRROR=true}"
+		[[ "$VOID_DISK1" != "$VOID_DISK2" ]] || {
+			failhard "VOID_DISK1 and VOID_DISK2 must be different"
+			exit 1
+		}
+	else
+		VOID_DISK2=none
+	fi
+
+	[[ "${VOID_SWAPSIZE}" =~ ^[0-9]+$ ]] && [ "$VOID_SWAPSIZE" -gt 0 ] || {
+		failhard "VOID_SWAPSIZE must be a positive integer"
+		exit 1
+	}
+	validate_hostname "$VOID_HOSTNAME" || {
+		failhard "Invalid hostname: $VOID_HOSTNAME"
+		exit 1
+	}
+	validate_username "$VOID_SUDOUSER" || {
+		failhard "Invalid username: $VOID_SUDOUSER"
+		exit 1
+	}
+	validate_timezone "$VOID_TIMEZONE" || {
+		failhard "Invalid timezone: $VOID_TIMEZONE"
+		exit 1
+	}
+	validate_keymap "$VOID_KEYMAP" || {
+		failhard "Invalid keymap: $VOID_KEYMAP"
+		exit 1
+	}
+
+	VOID_DISK1_SIZE="$(lsblk -dnpo SIZE "$VOID_DISK1" 2>/dev/null || true)"
+	VOID_DISK1_SIZE="${VOID_DISK1_SIZE:+($VOID_DISK1_SIZE)}"
+	if [[ "${VOID_MIRROR}" == true ]]; then
+		VOID_DISK2_SIZE="$(lsblk -dnpo SIZE "$VOID_DISK2" 2>/dev/null || true)"
+		VOID_DISK2_SIZE="${VOID_DISK2_SIZE:+($VOID_DISK2_SIZE)}"
+	else
+		VOID_DISK2_SIZE=""
+	fi
+
+	USER_PASSWORD="$VOID_USER_PASSWORD"
+	ZFS_PASSPHRASE="$VOID_ZFS_PASSPHRASE"
 	print_preconf_header
 }
 
@@ -1054,46 +1120,95 @@ install_zfs-autosnap() {
 	ok "Skipped linking efisync-runit service"
 }
 
-# ENTRY:
-while true; do
-	get_inputs
-	if confirm_menu; then rc=0; else rc=$?; fi
-	case "$rc" in
-	10) info "[Restarting configuration]" && unset VOID_MIRROR VOID_DISK1 VOID_DISK1_SIZE VOID_DISK2 VOID_DISK2_SIZE VOID_SWAPSIZE VOID_HOSTNAME VOID_SUDOUSER VOID_TIMEZONE VOID_KEYMAP && continue ;;
-	20) exit 0 ;;
-	0) break ;;
+run_interactive_configuration() {
+	while true; do
+		get_inputs
+		if confirm_menu; then rc=0; else rc=$?; fi
+		case "$rc" in
+		10) info "[Restarting configuration]" && unset VOID_MIRROR VOID_DISK1 VOID_DISK1_SIZE VOID_DISK2 VOID_DISK2_SIZE VOID_SWAPSIZE VOID_HOSTNAME VOID_SUDOUSER VOID_TIMEZONE VOID_KEYMAP && continue ;;
+		20) exit 0 ;;
+		0) break ;;
+		esac
+	done
+	print_postconf_header
+	echo
+	get_user_password
+	echo
+	get_zfs_passphrase
+}
+
+run_install() {
+	print_postconf_header
+	set_zfs_vars
+	wipe_disks
+	partition_disks
+	setup_zfs
+	install_base_system
+	configure_efi_partitions
+	configure_system
+	setup_zfsbootmenu
+	setup_swap
+	setup_user
+	echo "$VOID_HOSTNAME" >/mnt/etc/hostname
+	if [[ "${VOID_MIRROR}" == true ]]; then
+		sync_esps
+		install_efisync
+	fi
+	install_zfs-autosnap
+	umount -n -R /mnt
+	zpool export zroot
+	echo ""
+	echo "──────────────────────"
+	echo -e "${G}Install finished!${NC}"
+	echo "──────────────────────"
+	info "Dont forget to enable the following services after rebooting!:"
+	if [[ "${VOID_MIRROR}" == true ]]; then
+		ok "efisync"
+	fi
+	ok "zfs-autosnap"
+}
+
+usage() {
+	cat <<EOF
+Usage: $0 [--non-interactive]
+
+Interactive mode is the default.
+
+Required environment for --non-interactive:
+  VOID_MIRROR=true|false
+  VOID_DISK1=/dev/...
+  VOID_DISK2=/dev/...              required when VOID_MIRROR=true
+  VOID_SWAPSIZE=<positive integer>
+  VOID_HOSTNAME=<hostname>
+  VOID_SUDOUSER=<username>
+  VOID_TIMEZONE=<zoneinfo path>
+  VOID_KEYMAP=<keymap>
+  VOID_USER_PASSWORD=<password>
+  VOID_ZFS_PASSPHRASE=<passphrase>
+EOF
+}
+
+main() {
+	case "${1:-}" in
+	"")
+		run_interactive_configuration
+		;;
+	--non-interactive)
+		configure_non_interactive_inputs
+		;;
+	-h | --help)
+		usage
+		return 0
+		;;
+	*)
+		usage >&2
+		return 2
+		;;
 	esac
-done
-print_postconf_header
-echo
-get_user_password
-echo
-get_zfs_passphrase
-print_postconf_header
-set_zfs_vars
-wipe_disks
-partition_disks
-setup_zfs
-install_base_system
-configure_efi_partitions
-configure_system
-setup_zfsbootmenu
-setup_swap
-setup_user
-echo "$VOID_HOSTNAME" >/mnt/etc/hostname
-if [[ "${VOID_MIRROR}" == true ]]; then
-	sync_esps
-	install_efisync
+
+	run_install
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+	main "$@"
 fi
-install_zfs-autosnap
-umount -n -R /mnt
-zpool export zroot
-echo ""
-echo "──────────────────────"
-echo -e "${G}Install finished!${NC}"
-echo "──────────────────────"
-info "Dont forget to enable the following services after rebooting!:"
-if [[ "${VOID_MIRROR}" == true ]]; then
-    ok "efisync"
-fi
-ok "zfs-autosnap"

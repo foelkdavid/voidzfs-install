@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: ["ci-vm-tests"]
+  pull_request:
+    branches: ["ci-vm-tests"]
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: Unit behavior tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run unit tests
+        run: ./scripts/ci-check.sh --unit
+
+  vm:
+    name: VM install (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    needs: unit
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [single, mirror]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install VM dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf sshpass
+
+      - name: Run VM install test
+        run: ./scripts/ci-check.sh --vm "${{ matrix.mode }}"
+
+      - name: Upload VM artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-${{ matrix.mode }}-artifacts
+          path: artifacts/vm-${{ matrix.mode }}
