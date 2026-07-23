@@ -148,6 +148,12 @@ ssh_opts=(
 	-o LogLevel=ERROR
 	-p "$SSH_PORT"
 )
+scp_opts=(
+	-o StrictHostKeyChecking=no
+	-o UserKnownHostsFile=/dev/null
+	-o LogLevel=ERROR
+	-P "$SSH_PORT"
+)
 
 wait_for_ssh() {
 	local deadline=$((SECONDS + BOOT_TIMEOUT))
@@ -179,7 +185,7 @@ guest() {
 		local remote_script="/home/anon/voidzfs-command-${RANDOM}.sh"
 		local local_script="$ARTIFACT_DIR/remote-command-${RANDOM}.sh"
 		printf "%s\n" "$cmd" >"$local_script"
-		sshpass -p voidlinux scp "${ssh_opts[@]}" "$local_script" anon@127.0.0.1:"$remote_script"
+		sshpass -p voidlinux scp "${scp_opts[@]}" "$local_script" anon@127.0.0.1:"$remote_script"
 		"${timeout_args[@]}" sshpass -p voidlinux ssh -tt "${ssh_opts[@]}" anon@127.0.0.1 "printf '%s\n' voidlinux | su -c 'sh $remote_script'"
 	fi
 }
@@ -192,9 +198,9 @@ guest_copy_repo() {
 		--exclude=artifacts \
 		-cf "$tarball" .
 	if [[ "${SSH_USER:-}" == root ]]; then
-		sshpass -p voidlinux scp "${ssh_opts[@]}" "$tarball" root@127.0.0.1:/tmp/repo.tar
+		sshpass -p voidlinux scp "${scp_opts[@]}" "$tarball" root@127.0.0.1:/tmp/repo.tar
 	else
-		sshpass -p voidlinux scp "${ssh_opts[@]}" "$tarball" anon@127.0.0.1:/home/anon/repo.tar
+		sshpass -p voidlinux scp "${scp_opts[@]}" "$tarball" anon@127.0.0.1:/home/anon/repo.tar
 		guest "cp /home/anon/repo.tar /tmp/repo.tar"
 	fi
 	guest "rm -rf /root/voidzfs-install && mkdir -p /root/voidzfs-install && tar -xf /tmp/repo.tar -C /root/voidzfs-install"
