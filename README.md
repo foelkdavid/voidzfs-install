@@ -3,8 +3,6 @@ Interactive Voidlinux on ZFS installer (optional with zfs-mirror)
 
 <img width="50%" height="50%" alt="image" src="https://github.com/user-attachments/assets/e9036490-1053-4d29-b139-d70d9176a81a" />
 
-Warning! Single-Disk Setup is currently broken!
-
 ## Howto:
 1. Download the latest hrmpf image.
 2. run this script.
