@@ -25,6 +25,7 @@ fail() { printf "  %b %s\n" "${R}✘${NC}" "$1"; }
 failhard() { printf "  %b\n" "${R}✘ $1${NC}"; }
 info() { printf "%b%s%b\n" "$P" "$1" "$NC"; }
 note() { printf "  %b%s%b\n" "$LB" "$1" "$NC"; }
+clear_screen() { clear 2>/dev/null || true; }
 
 # used in run_prechecks()
 check() {
@@ -101,7 +102,7 @@ servicecheck() {
 }
 
 run_prechecks() {
-	clear
+	clear_screen
 	echo "──────────────────────"
 	echo -e "${G}Void-ZFS-Installer${NC}"
 	echo "──────────────────────"
@@ -122,7 +123,7 @@ run_prechecks() {
 }
 
 print_preconf_header() {
-	clear
+	clear_screen
 	echo "──────────────────────"
 	echo -e "${G}Void-ZFS-Installer${NC}"
 	echo "──────────────────────"
@@ -141,7 +142,7 @@ print_preconf_header() {
 }
 
 print_postconf_header() {
-	clear
+	clear_screen
 	echo "──────────────────────"
 	echo -e "${G}Void-ZFS-Installer${NC}"
 	echo "──────────────────────"
@@ -321,7 +322,7 @@ confirm_menu() {
 }
 
 get_inputs() {
-	clear
+	clear_screen
 	run_prechecks
 	sleep 1
 	print_preconf_header
