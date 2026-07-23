@@ -59,6 +59,16 @@ assert_eq "nvme partition suffix" "/dev/nvme0n1p1" "$(devpart /dev/nvme0n1 1)"
 assert_eq "mmc partition suffix" "/dev/mmcblk0p2" "$(devpart /dev/mmcblk0 2)"
 
 assert_ok "required service files exist" servicecheck
+assert_ok "localhost resolves" resolvecheck localhost
+
+(
+	timeout() {
+		[[ "$1" == 10 && "$2" == bash && "$3" == -c && "$4" == ":</dev/tcp/example.org/443" ]]
+	}
+	tcpcheck example.org 443
+)
+status=$?
+assert_ok "tcpcheck uses bash tcp socket with timeout" test "$status" -eq 0
 
 while IFS= read -r line; do
 	[[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue

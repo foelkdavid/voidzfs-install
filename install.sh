@@ -101,6 +101,15 @@ servicecheck() {
 	return 0
 }
 
+resolvecheck() {
+	getent hosts "$1" >/dev/null 2>&1
+}
+
+tcpcheck() {
+	local host="$1" port="$2"
+	timeout 10 bash -c ":</dev/tcp/${host}/${port}"
+}
+
 run_prechecks() {
 	clear_screen
 	echo "──────────────────────"
@@ -112,8 +121,8 @@ run_prechecks() {
 	check "Check hostname" hostnamecheck
 	check "ZFS utilities and module available" zfscheck
 	check "Efisync service available" servicecheck
-	check "Connectivity to 1.1.1.1 (ICMP)" ping -c2 -W2 1.1.1.1
-	check "DNS resolution (voidlinux.org)" ping -c2 -W2 voidlinux.org
+	check "DNS resolution (voidlinux.org)" resolvecheck voidlinux.org
+	check "HTTPS connectivity to repository" tcpcheck repo-de.voidlinux.org 443
 
 	if [ "$FAILED" -ne 0 ]; then
 		echo
