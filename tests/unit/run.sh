@@ -58,6 +58,20 @@ assert_eq "virtio partition suffix" "/dev/vda2" "$(devpart /dev/vda 2)"
 assert_eq "nvme partition suffix" "/dev/nvme0n1p1" "$(devpart /dev/nvme0n1 1)"
 assert_eq "mmc partition suffix" "/dev/mmcblk0p2" "$(devpart /dev/mmcblk0 2)"
 
+(
+	udevadm() { :; }
+	blkid() {
+		[[ "$*" == "-s PARTUUID -o value /dev/vda3" ]] || return 1
+		printf "%s\n" "11111111-2222-3333-4444-555555555555"
+	}
+	wait_for_path() {
+		[[ "$1" == "/dev/disk/by-partuuid/11111111-2222-3333-4444-555555555555" ]]
+	}
+	[[ "$(partuuid_path /dev/vda3)" == "/dev/disk/by-partuuid/11111111-2222-3333-4444-555555555555" ]]
+)
+status=$?
+assert_ok "partuuid path waits for udev symlink" test "$status" -eq 0
+
 assert_ok "required service files exist" servicecheck
 assert_ok "localhost resolves" resolvecheck localhost
 

@@ -462,6 +462,7 @@ partition_disks() {
 
 		# reload kernel partition table
 		partprobe "$d" >/dev/null 2>&1 || true
+		udevadm settle --timeout=5 >/dev/null 2>&1 || true
 	done
 }
 
@@ -470,6 +471,28 @@ devpart() {
 	local disk="$1" part="${2:-1}" sep=""
 	[[ "$disk" =~ ^/dev/(nvme|mmcblk|nbd|loop) ]] && sep="p"
 	printf "%s%s%s" "$disk" "$sep" "$part"
+}
+
+wait_for_path() {
+	local path="$1" deadline=$((SECONDS + 15))
+
+	while (( SECONDS < deadline )); do
+		[[ -e "$path" ]] && return 0
+		udevadm settle --timeout=2 >/dev/null 2>&1 || true
+		sleep 0.2
+	done
+
+	failhard "Timed out waiting for device path: $path"
+	return 1
+}
+
+partuuid_path() {
+	local dev="$1" partuuid path
+	udevadm settle --timeout=5 >/dev/null 2>&1 || true
+	partuuid="$(blkid -s PARTUUID -o value "$dev")" || return 1
+	path="/dev/disk/by-partuuid/$partuuid"
+	wait_for_path "$path" || return 1
+	printf "%s\n" "$path"
 }
 
 set_zfs_vars() {
@@ -685,6 +708,16 @@ create_zpool() {
 	}
 
 	if [[ "${VOID_MIRROR:-false}" == true && -n "${POOL_DEVICE_2:-}" && "$POOL_DEVICE_2" != "none" ]]; then
+		local pool_path_1 pool_path_2
+		pool_path_1="$(partuuid_path "$POOL_DEVICE_1")" || {
+			failhard "Could not resolve PARTUUID path for $POOL_DEVICE_1"
+			exit 1
+		}
+		pool_path_2="$(partuuid_path "$POOL_DEVICE_2")" || {
+			failhard "Could not resolve PARTUUID path for $POOL_DEVICE_2"
+			exit 1
+		}
+
 		info "[Creating encrypted ZFS pool 'zroot' as MIRROR]"
 		zpool create -f \
 			-o ashift=12 \
@@ -699,8 +732,8 @@ create_zpool() {
 			-O keylocation=file:///etc/zfs/zroot.key \
 			-O keyformat=passphrase \
 			zroot mirror \
-			/dev/disk/by-partuuid/"$(blkid -s PARTUUID -o value "$POOL_DEVICE_1")" \
-			/dev/disk/by-partuuid/"$(blkid -s PARTUUID -o value "$POOL_DEVICE_2")" ||
+			"$pool_path_1" \
+			"$pool_path_2" ||
 			{
 				failhard "ZFS pool creation (mirror) failed"
 				unset ZFS_PASSPHRASE
@@ -709,6 +742,12 @@ create_zpool() {
 
 		ok "Created 'zroot' mirror: $POOL_DEVICE_1 + $POOL_DEVICE_2"
 	else
+		local pool_path_1
+		pool_path_1="$(partuuid_path "$POOL_DEVICE_1")" || {
+			failhard "Could not resolve PARTUUID path for $POOL_DEVICE_1"
+			exit 1
+		}
+
 		info "[Creating encrypted ZFS pool 'zroot' on SINGLE DISK]"
         zpool create -f \
         	-o ashift=12 \
@@ -723,7 +762,7 @@ create_zpool() {
         	-O keylocation=file:///etc/zfs/zroot.key \
         	-O keyformat=passphrase \
         	zroot \
-        	/dev/disk/by-partuuid/"$(blkid -s PARTUUID -o value "$POOL_DEVICE_1")" ||
+        	"$pool_path_1" ||
         {
         	failhard "ZFS pool creation (single disk) failed"
         	unset ZFS_PASSPHRASE
