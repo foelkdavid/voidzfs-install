@@ -22,7 +22,8 @@ DISK_SIZE="${DISK_SIZE:-16G}"
 INSTALL_TIMEOUT="${INSTALL_TIMEOUT:-7200}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-900}"
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
-OVMF_CODE="${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}"
+OVMF_CODE="${OVMF_CODE:-}"
+OVMF_VARS="${OVMF_VARS:-}"
 
 require() {
 	command -v "$1" >/dev/null 2>&1 || {
@@ -38,6 +39,42 @@ require ssh
 require scp
 require sshpass
 require tar
+
+first_existing_file() {
+	local path
+	for path in "$@"; do
+		if [[ -f "$path" ]]; then
+			printf "%s\n" "$path"
+			return 0
+		fi
+	done
+	return 1
+}
+
+resolve_ovmf() {
+	if [[ -z "$OVMF_CODE" ]]; then
+		OVMF_CODE="$(first_existing_file \
+			/usr/share/OVMF/OVMF_CODE.fd \
+			/usr/share/OVMF/OVMF_CODE_4M.fd \
+			/usr/share/OVMF/x64/OVMF_CODE.fd \
+			/usr/share/ovmf/OVMF.fd)" || {
+			printf "could not find OVMF_CODE; install ovmf or set OVMF_CODE\n" >&2
+			exit 1
+		}
+	fi
+
+	if [[ -z "$OVMF_VARS" ]]; then
+		OVMF_VARS="$(first_existing_file \
+			/usr/share/OVMF/OVMF_VARS.fd \
+			/usr/share/OVMF/OVMF_VARS_4M.fd \
+			/usr/share/OVMF/x64/OVMF_VARS.fd)" || {
+			printf "could not find OVMF_VARS; install ovmf or set OVMF_VARS\n" >&2
+			exit 1
+		}
+	fi
+
+	printf "OVMF_CODE=%s\nOVMF_VARS=%s\n" "$OVMF_CODE" "$OVMF_VARS" | tee "$ARTIFACT_DIR/ovmf.env"
+}
 
 resolve_latest_hrmpf() {
 	local api release asset
@@ -72,7 +109,7 @@ download_iso() {
 
 qemu_args_base() {
 	local ovmf_vars="$ARTIFACT_DIR/OVMF_VARS.fd"
-	cp /usr/share/OVMF/OVMF_VARS.fd "$ovmf_vars"
+	cp "$OVMF_VARS" "$ovmf_vars"
 	if [[ -r /dev/kvm && -w /dev/kvm ]]; then
 		printf '%s\0' -enable-kvm -machine q35,accel=kvm:tcg
 	else
@@ -229,6 +266,7 @@ zpool export zroot
 }
 
 download_iso
+resolve_ovmf
 make_disks
 
 args=()
