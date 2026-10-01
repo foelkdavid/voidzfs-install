@@ -25,6 +25,9 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v4
 
+      - name: Boot installer regression tests
+        run: python3 -B -m unittest discover -s tests -v
+
       # Runs a set of commands using the runners shell
       - name: Shellcheck
         run: |
